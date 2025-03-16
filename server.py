@@ -1,14 +1,12 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import aiohttp
-import asyncio
+import requests
 import json
 import logging
-from aiohttp import ClientTimeout
 
 app = Flask(__name__)
 
-# Configure CORS with specific settings - EXACTLY as before
+# Configure CORS with specific settings
 CORS(app, resources={
     r"/*": {
         "origins": "*",
@@ -23,8 +21,6 @@ CORS(app, resources={
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TIMEOUT = ClientTimeout(total=5, connect=1, sock_read=3)
-
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -35,52 +31,8 @@ def get_random_user_agent():
     import random
     return random.choice(USER_AGENTS)
 
-async def check_single_site(session, url, e_string, m_string, e_code):
-    try:
-        headers = {
-            'User-Agent': get_random_user_agent(),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Referer': 'https://www.google.com/',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
-        }
-
-        async with session.get(url, headers=headers, timeout=TIMEOUT, ssl=False) as response:
-            final_url = str(response.url)
-            text = await response.text()
-            text_lower = text.lower()
-            final_url_lower = final_url.lower()
-
-            exists = False
-            if any(err in final_url_lower for err in ["404", "error", "not-found"]):
-                exists = False
-            elif e_string and e_string.lower() in text_lower:
-                exists = not (m_string and m_string.lower() in text_lower)
-            elif m_string and m_string.lower() not in text_lower:
-                exists = True
-            elif response.status == e_code:
-                exists = not any(err in text_lower for err in [
-                    "404", "not found", "error", "does not exist",
-                    "page not found", "no user", "not available"
-                ])
-
-            return {
-                'status': response.status,
-                'exists': exists,
-                'final_url': final_url,
-                'text': text  # Added back the response text
-            }
-
-    except asyncio.TimeoutError:
-        return {'exists': False, 'status': 408, 'final_url': url}
-    except Exception:
-        return {'exists': False, 'status': 500, 'final_url': url}
-
 @app.route('/check', methods=['POST', 'OPTIONS'])
-async def check_username():
-    # Handle preflight requests
+def check_username():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'})
 
@@ -93,10 +45,88 @@ async def check_username():
         e_string = data.get('e_string')
         m_string = data.get('m_string')
         e_code = data.get('e_code', 200)
+        m_code = data.get('m_code', 404)
 
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=0)) as session:
-            result = await check_single_site(session, url, e_string, m_string, e_code)
-            return jsonify(result)
+        headers = {
+            'User-Agent': get_random_user_agent(),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Referer': 'https://www.google.com/',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
+
+        try:
+            session = requests.Session()
+            response = session.get(
+                url, 
+                headers=headers, 
+                timeout=(5, 15),  # Increased timeouts
+                allow_redirects=True,
+                verify=False
+            )
+            
+            final_url = response.url
+            response_text = response.text.lower()
+            
+            # Initialize as False
+            exists = False
+            
+            # Check status code first
+            if response.status_code == e_code:
+                exists = True
+            elif response.status_code == m_code:
+                exists = False
+            
+            # If e_string is provided, it takes precedence
+            if e_string:
+                e_string_lower = e_string.lower()
+                if e_string_lower in response_text:
+                    exists = True
+                    # Only check m_string if e_string was found
+                    if m_string and m_string.lower() in response_text:
+                        exists = False
+            # If only m_string is provided
+            elif m_string and m_string.lower() not in response_text:
+                exists = True
+            
+            # Additional validation only if exists is True
+            if exists:
+                # Check for common error indicators in URL
+                error_indicators = ["404", "error", "not-found", "notfound"]
+                if any(indicator in final_url.lower() for indicator in error_indicators):
+                    exists = False
+                
+                # Check for error messages in content
+                error_messages = [
+                    "404", "not found", "error", "does not exist",
+                    "page not found", "no user", "not available",
+                    "profile not found", "user not found",
+                    "account not found", "user does not exist"
+                ]
+                if any(msg in response_text for msg in error_messages):
+                    exists = False
+
+            return jsonify({
+                'status': response.status_code,
+                'exists': exists,
+                'final_url': final_url,
+                'text': response.text
+            })
+
+        except requests.Timeout:
+            return jsonify({
+                'exists': False,
+                'status': 408,
+                'final_url': url
+            })
+        except requests.RequestException:
+            return jsonify({
+                'exists': False,
+                'status': 500,
+                'final_url': url
+            })
 
     except Exception as e:
         logger.error(f"Internal server error: {str(e)}")
@@ -104,7 +134,6 @@ async def check_username():
 
 @app.route('/metadata', methods=['GET', 'OPTIONS'])
 def get_metadata():
-    # Handle preflight requests
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'})
 
