@@ -46,8 +46,7 @@ def get_random_user_agent():
 def check_username():
     # Handle preflight requests
     if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        return response
+        return jsonify({'status': 'ok'})
 
     try:
         data = request.get_json()
@@ -71,7 +70,7 @@ def check_username():
         }
 
         try:
-            # Increased timeout to 30 seconds and added connection timeout
+            # Make the request with a timeout
             response = requests.get(
                 url, 
                 headers=headers, 
@@ -98,6 +97,7 @@ def check_username():
         
         final_url = response.url
         
+        # Common error strings to check in response text and URL
         common_error_strings = [
             "404", "not found", "error", "does not exist",
             "page not found", "no user", "not available",
@@ -130,12 +130,12 @@ def check_username():
         result = {
             'status': response.status_code,
             'exists': exists,
-            'final_url': final_url
+            'final_url': final_url,
+            'text': response.text  # Include response text for debugging
         }
         
         logger.info(f"Checked URL: {url}. Exists: {exists}")
-        response = jsonify(result)
-        return response
+        return jsonify(result)
 
     except Exception as e:
         logger.error(f"Internal server error: {str(e)}")
@@ -146,8 +146,7 @@ def check_username():
 def get_metadata():
     # Handle preflight requests
     if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        return response
+        return jsonify({'status': 'ok'})
 
     try:
         with open('sites.json', 'r', encoding='utf-8') as f:
@@ -156,8 +155,7 @@ def get_metadata():
                     if all(k in site for k in ['name', 'uri_check', 'cat']) and
                     (('e_string' in site and site['e_string']) or 
                      ('m_string' in site and site['m_string']))]
-            response = jsonify({'sites': sites})
-            return response
+            return jsonify({'sites': sites})
     except Exception as e:
         logger.error(f"Failed to load metadata: {str(e)}")
         return jsonify({'error': f'Failed to load metadata: {str(e)}'}), 500
