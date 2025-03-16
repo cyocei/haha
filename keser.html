@@ -230,19 +230,24 @@
                     })
                 });
 
-                if (!response.ok) return null;
-
                 const data = await response.json();
                 
+                // If the request timed out, skip this site
+                if (response.status === 408) {
+                    console.log(`Timeout checking ${site.name}, skipping...`);
+                    return null;
+                }
+
                 if (data.exists) {
                     return {
                         name: site.name,
-                        url: url,  // Using original URL for now
+                        url: data.final_url || url,
                         category: site.cat
                     };
                 }
                 return null;
             } catch (error) {
+                console.log(`Error checking ${site.name}:`, error);
                 return null;
             }
         }
@@ -276,12 +281,14 @@
             const loading = document.getElementById('loading');
             const results = document.getElementById('results');
             const error = document.getElementById('error');
+            const summary = document.getElementById('summary');
 
             // Clear previous results
             loading.style.display = 'block';
             results.innerHTML = '';
             results.style.display = 'block';
             error.style.display = 'none';
+            summary.innerHTML = '';
 
             try {
                 const metadata = await fetchMetadata();
@@ -289,22 +296,54 @@
                     throw new Error('Failed to fetch metadata');
                 }
 
-                // Process one site at a time for testing
-                for (const site of metadata.sites) {
-                    const result = await checkUsernameOnWebsite(site, username);
-                    if (result) {
-                        addResultToDOM(result);
-                    }
+                let foundCount = 0;
+                let timeoutCount = 0;
+                let errorCount = 0;
+                const totalSites = metadata.sites.length;
+
+                // Process sites in smaller batches
+                const batchSize = 3;
+                for (let i = 0; i < metadata.sites.length; i += batchSize) {
+                    const batch = metadata.sites.slice(i, i + batchSize);
+                    
+                    // Update progress
+                    summary.innerHTML = `Checking sites ${i + 1}-${Math.min(i + batchSize, totalSites)} of ${totalSites}...`;
+                    
+                    // Process batch in parallel
+                    const results = await Promise.all(
+                        batch.map(site => 
+                            checkUsernameOnWebsite(site, username)
+                            .then(result => {
+                                if (result) {
+                                    foundCount++;
+                                    addResultToDOM(result);
+                                }
+                                return result;
+                            })
+                            .catch(error => {
+                                errorCount++;
+                                console.error(`Error with ${site.name}:`, error);
+                                return null;
+                            })
+                        )
+                    );
+
+                    // Small delay between batches
+                    await new Promise(resolve => setTimeout(resolve, 100));
                 }
 
                 loading.style.display = 'none';
                 
-                if (results.children.length === 0) {
+                if (foundCount === 0) {
                     showError(`Username '${username}' not found on any sites`);
                 }
+
+                // Show final summary
+                summary.innerHTML = `Search complete | Found: ${foundCount} matches | Errors: ${errorCount}`;
             } catch (error) {
                 loading.style.display = 'none';
                 showError('Search completed with some errors');
+                console.error('Search error:', error);
             }
         }
 
