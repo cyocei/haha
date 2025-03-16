@@ -2,13 +2,16 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 import json
-import time
 import logging
+import random
+import asyncio
+import aiohttp
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 
 app = Flask(__name__)
 
-# Configure CORS with specific settings
+# Configure CORS
 CORS(app, resources={
     r"/*": {
         "origins": "*",
@@ -24,12 +27,8 @@ CORS(app, resources={
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def rate_limit(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        time.sleep(0.1)  # Simple rate limiting
-        return f(*args, **kwargs)
-    return decorated_function
+# Increased thread pool for concurrent requests
+executor = ThreadPoolExecutor(max_workers=50)
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -38,13 +37,63 @@ USER_AGENTS = [
 ]
 
 def get_random_user_agent():
-    import random
     return random.choice(USER_AGENTS)
 
+async def check_url(session, url, headers, e_string, m_string, e_code, m_code):
+    try:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5), ssl=False) as response:
+            text = await response.text()
+            final_url = str(response.url)
+            
+            common_error_strings = [
+                "404", "not found", "error", "does not exist",
+                "page not found", "no user", "not available",
+                "profile not found", "user not found"
+            ]
+            
+            exists = False
+            
+            if e_string and e_string.lower() in text.lower():
+                if m_string:
+                    exists = m_string.lower() not in text.lower()
+                else:
+                    exists = True
+            elif m_string and m_string.lower() not in text.lower():
+                exists = True
+            else:
+                if response.status == e_code:
+                    exists = True
+                    if any(error in text.lower() for error in common_error_strings):
+                        exists = False
+                
+                if exists and any(err in final_url.lower() for err in ["404", "error", "not-found"]):
+                    exists = False
+
+            return {
+                'status': response.status,
+                'exists': exists,
+                'final_url': final_url,
+                'text': text
+            }
+
+    except asyncio.TimeoutError:
+        return {
+            'error': 'Request timed out',
+            'exists': False,
+            'status': 408,
+            'final_url': url
+        }
+    except Exception as e:
+        logger.error(f"Error checking {url}: {str(e)}")
+        return {
+            'error': str(e),
+            'exists': False,
+            'status': 500,
+            'final_url': url
+        }
+
 @app.route('/check', methods=['POST', 'OPTIONS'])
-@rate_limit
-def check_username():
-    # Handle preflight requests
+async def check_username():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'})
 
@@ -69,82 +118,16 @@ def check_username():
             'Upgrade-Insecure-Requests': '1'
         }
 
-        try:
-            # Make the request with a timeout
-            response = requests.get(
-                url, 
-                headers=headers, 
-                timeout=(5, 30),  # (connection timeout, read timeout)
-                allow_redirects=True,
-                verify=False  # Disable SSL verification for problematic sites
-            )
-        except requests.Timeout:
-            logger.warning(f"Request timed out for URL: {url}")
-            return jsonify({
-                'error': 'Request timed out',
-                'exists': False,
-                'status': 408,
-                'final_url': url
-            }), 408
-        except requests.RequestException as e:
-            logger.error(f"Request failed for URL: {url}. Error: {str(e)}")
-            return jsonify({
-                'error': str(e),
-                'exists': False,
-                'status': 500,
-                'final_url': url
-            }), 500
-        
-        final_url = response.url
-        
-        # Common error strings to check in response text and URL
-        common_error_strings = [
-            "404", "not found", "error", "does not exist",
-            "page not found", "no user", "not available",
-            "profile not found", "user not found"
-        ]
-        
-        exists = False
-        
-        # Check for existence based on e_string and m_string
-        if e_string and e_string.lower() in response.text.lower():
-            if m_string:
-                exists = m_string.lower() not in response.text.lower()
-            else:
-                exists = True
-        elif m_string and m_string.lower() not in response.text.lower():
-            exists = True
-        else:
-            if response.status_code == e_code:
-                exists = True
-                # Check for common error strings in response text
-                for error_string in common_error_strings:
-                    if error_string.lower() in response.text.lower():
-                        exists = False
-                        break
-            
-            # Check for error patterns in the final URL
-            if exists and any(err in final_url.lower() for err in ["404", "error", "not-found"]):
-                exists = False
-
-        result = {
-            'status': response.status_code,
-            'exists': exists,
-            'final_url': final_url,
-            'text': response.text  # Include response text for debugging
-        }
-        
-        logger.info(f"Checked URL: {url}. Exists: {exists}")
-        return jsonify(result)
+        async with aiohttp.ClientSession() as session:
+            result = await check_url(session, url, headers, e_string, m_string, e_code, m_code)
+            return jsonify(result)
 
     except Exception as e:
         logger.error(f"Internal server error: {str(e)}")
         return jsonify({'error': 'Internal server error', 'exists': False}), 500
 
 @app.route('/metadata', methods=['GET', 'OPTIONS'])
-@rate_limit
-def get_metadata():
-    # Handle preflight requests
+async def get_metadata():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'})
 
