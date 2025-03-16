@@ -5,15 +5,24 @@ import asyncio
 import json
 import logging
 from aiohttp import ClientTimeout
-from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Configure CORS with specific settings - EXACTLY as before
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+        "expose_headers": ["Content-Range", "X-Content-Range"],
+        "max_age": 3600,
+        "supports_credentials": True
+    }
+})
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Extremely aggressive timeout
 TIMEOUT = ClientTimeout(total=5, connect=1, sock_read=3)
 
 USER_AGENTS = [
@@ -32,6 +41,10 @@ async def check_single_site(session, url, e_string, m_string, e_code):
             'User-Agent': get_random_user_agent(),
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
+            'Referer': 'https://www.google.com/',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
         }
 
         async with session.get(url, headers=headers, timeout=TIMEOUT, ssl=False) as response:
@@ -56,7 +69,8 @@ async def check_single_site(session, url, e_string, m_string, e_code):
             return {
                 'status': response.status,
                 'exists': exists,
-                'final_url': final_url
+                'final_url': final_url,
+                'text': text  # Added back the response text
             }
 
     except asyncio.TimeoutError:
@@ -66,6 +80,7 @@ async def check_single_site(session, url, e_string, m_string, e_code):
 
 @app.route('/check', methods=['POST', 'OPTIONS'])
 async def check_username():
+    # Handle preflight requests
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'})
 
@@ -89,6 +104,7 @@ async def check_username():
 
 @app.route('/metadata', methods=['GET', 'OPTIONS'])
 def get_metadata():
+    # Handle preflight requests
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'})
 
