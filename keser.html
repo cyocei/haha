@@ -2,27 +2,541 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Keser - Advanced Username Search Tool">
-    <meta name="keywords" content="username search, social media, account finder">
-    <title>Keser - Username Search</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <meta name="theme-color" content="#1a1a1a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Keser</title>
+    <link rel="icon" type="image/jpeg" href="logo.jpeg">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-        /* Your existing CSS styles */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: linear-gradient(135deg, #0f0f0f, #1a1a1a); 
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f0f0f, #1a1a1a);
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            position: relative;
+            padding-top: env(safe-area-inset-top, 0);
+        }
+
+        .container {
+            text-align: center;
+            max-width: 1000px;
+            padding: 40px;
+            background: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            position: relative;
+            z-index: 2;
+            opacity: 0;
+            animation: fadeIn 1.5s ease-out 3s forwards;
+            margin: auto;
+            width: 80%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        .results-box {
+            margin-top: 20px;
+            background: #000000;
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+        }
+
+        .results-header {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            padding: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+
+        .results {
+            max-height: 400px;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .result-item {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            padding: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            transition: background 0.3s ease;
+        }
+
+        .result-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .search-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            width: 100%;
+            max-width: 600px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.05);
+            color: #000000;
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+
+        input[type="text"]::placeholder {
+            color: rgba(0, 0, 0, 0.5);
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            background: rgba(0, 0, 0, 0.08);
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
+        }
+
+        button {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            background: #000;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        button:hover {
+            background: #111;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+
+        .loading {
+            display: none;
+            color: #fff;
+            margin: 20px 0;
+            font-style: italic;
+        }
+
+        .error {
+            display: none;
+            color: #ff4444;
+            margin: 20px 0;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(255, 68, 68, 0.1);
+        }
+
+        .summary {
+            margin-top: 20px;
+            color: #888;
+            font-size: 14px;
+        }
+
+        #starfield {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        #intro {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(135deg, #0f0f0f, #1a1a1a);
+            z-index: 10;
+            animation: fadeOut 1s ease-out 2s forwards;
+        }
+
+        .intro-content {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 25px;
+        }
+
+        .intro-logo {
+            width: 90px;
+            height: 90px;
+            object-fit: contain;
+            opacity: 0;
+            animation: fadeInText 1.5s ease-out 0.5s forwards;
+        }
+
+        #intro h1 {
+            font-size: 5rem;
+            background: linear-gradient(90deg, #fff 40%, #888 100%);
+            -webkit-background-clip: text;
+            color: transparent;
+            opacity: 0;
+            animation: fadeInText 1.5s ease-out 0.5s forwards;
+            margin: 0;
+            line-height: 1;
+            padding: 0;
+            letter-spacing: 0;
+        }
+
+        @keyframes fadeInText {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            to { opacity: 0; visibility: hidden; }
+        }
+
+        .keser-header {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 2rem;
+            background: linear-gradient(90deg, #fff, #aaa);
+            -webkit-background-clip: text;
+            color: transparent;
+            z-index: 10;
+            opacity: 0;
+            animation: fadeIn 1.5s ease-out 3s forwards;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo-img {
+            width: 50px;
+            height: 50px;
+            object-fit: contain;
+        }
+
+        #solar-container {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 120px;
+            height: 120px;
+            z-index: 3;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            overflow: visible;
+            opacity: 0;
+            animation: fadeIn 1.5s ease-out 3s forwards;
+        }
+
+        .solar-system {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            margin: auto;
+            overflow: visible;
+            background: transparent;
+            border: none;
+            box-shadow: none;
+        }
+
+        .orbit {
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        #sun, .orbit, .orbit + div, .orbit + div > div {
+            position: absolute;
+        }
+
+        #sun, .orbit, .orbit + div {
+            top: 50%;
+            left: 50%;
+        }
+
+        .orbit + div > div {
+            top: 0;
+            left: 50%;
+        }
+
+        .orbit, .orbit + div div, #earth {
+            border-radius: 50%;
+        }
+
+        #sun {
+            height: 40px;
+            width: 40px;
+            background-color: #ffffff;
+            margin-top: -20px;
+            margin-left: -20px;
+            border-radius: 50%;
+        }
+
+        #earth {
+            height: 10px;
+            width: 10px;
+            margin-left: -5px;
+            margin-top: -5px;
+            background-color: #ffffff;
+        }
+
+        .earth-orbit, .earth-spin {
+            width: 80px;
+            height: 80px;
+            margin-left: -40px;
+            margin-top: -40px;
+        }
+
+        #moon {
+            margin-top: -3px;
+            margin-left: -3px;
+            height: 6px;
+            width: 6px;
+            background: #ffffff;
+        }
+
+        .moon-orbit, .moon-spin {
+            height: 20px;
+            width: 20px;
+            margin-top: -10px;
+            margin-left: -10px;
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        #venus {
+            margin-top: -8px;
+            margin-left: -8px;
+            height: 16px;
+            width: 16px;
+            background-color: #ffffff;
+        }
+
+        .venus-orbit, .venus-spin {
+            margin-top: -30px;
+            margin-left: -30px;
+            width: 60px;
+            height: 60px;
+        }
+
+        #mars {
+            margin-top: -7px;
+            margin-left: -7px;
+            height: 14px;
+            width: 14px;
+            background-color: #ffffff;
+        }
+
+        .mars-orbit, .mars-spin {
+            width: 100px;
+            height: 100px;
+            margin-left: -50px;
+            margin-top: -50px;
+        }
+
+        @keyframes spin-right {
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .earth-spin {
+            animation: spin-right 36.5s linear infinite;
+        }
+
+        .moon-spin {
+            animation: spin-right 3s linear infinite;
+        }
+
+        .venus-spin {
+            animation: spin-right 22s linear infinite;
+        }
+
+        .mars-spin {
+            animation: spin-right 68.7s linear infinite;
+        }
+
+        @media only screen and (max-width: 768px) {
+            .container {
+                width: 90%;
+                padding: 20px;
+                top: 55%;
+            }
+
+            .results-header, .result-item {
+                font-size: 14px;
+            }
+
+            .search-container {
+                flex-direction: column;
+            }
+
+            button {
+                width: 100%;
+            }
+
+            #intro h1 {
+                font-size: 2.5rem;
+                letter-spacing: 0;
+            }
+
+            .intro-logo {
+                width: 50px;
+                height: 50px;
+            }
+
+            .intro-content {
+                gap: 15px;
+            }
+
+            .keser-header {
+                top: 15px;
+                left: 15px;
+                font-size: 1.5rem;
+                gap: 8px;
+            }
+
+            .logo-img {
+                width: 35px;
+                height: 35px;
+            }
+
+            #solar-container {
+                width: 80px;
+                height: 80px;
+                top: 15px;
+                right: 15px;
+            }
+            
+            .solar-system {
+                width: 80px;
+                height: 80px;
+            }
+            
+            #sun {
+                height: 25px;
+                width: 25px;
+                margin-top: -12.5px;
+                margin-left: -12.5px;
+            }
+        }
+
+        /* Additional iPhone-specific adjustments */
+        @media only screen and (max-width: 390px) {
+            .container {
+                width: 95%;
+                padding: 15px;
+                top: 55%;
+            }
+
+            #intro h1 {
+                font-size: 2rem;
+            }
+
+            .intro-logo {
+                width: 40px;
+                height: 40px;
+            }
+
+            .keser-header {
+                top: 10px;
+                left: 10px;
+                font-size: 1.2rem;
+            }
+
+            .logo-img {
+                width: 30px;
+                height: 30px;
+            }
+
+            #solar-container {
+                width: 60px;
+                height: 60px;
+                top: 10px;
+                right: 10px;
+            }
+
+            .solar-system {
+                width: 60px;
+                height: 60px;
+            }
+
+            #sun {
+                height: 20px;
+                width: 20px;
+                margin-top: -10px;
+                margin-left: -10px;
+            }
+
+            .results-header, .result-item {
+                font-size: 12px;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="banner">
-            <pre>
-.-. .-..----. .----..----..----. 
-| |/ / | {_  { {__  | {_  | {}  }
-| |\ \ | {__ .-._} }| {__ | .-. \
-`-' `-'`----'`----' `----'`-' `-'
-            </pre>
-            <div style="color: #800080;">The Advance Username Search.</div>
-            <div style="color: #800080;">~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~</div>
+    <div id="intro">
+        <div class="intro-content">
+            <img src="logo.jpeg" alt="Keser Logo" class="intro-logo">
+            <h1>Keser</h1>
         </div>
-
+    </div>
+    <div class="keser-header">
+        <img src="logo.jpeg" alt="Keser Logo" class="logo-img">
+        <span>Keser</span>
+    </div>
+    <div id="starfield"></div>
+    <div id="solar-container">
+        <div class="solar-system">
+            <div id="sun"></div>
+            <div class="orbit venus-orbit"></div>
+            <div class="venus-spin">
+                <div id="venus"></div>
+            </div>
+            <div class="orbit earth-orbit"></div>
+            <div class="earth-spin">
+                <div class="orbit moon-orbit"></div>
+                <div class="moon-spin">
+                    <div id="moon"></div>
+                </div>
+                <div id="earth"></div>
+            </div>
+            <div class="orbit mars-orbit"></div>
+            <div class="mars-spin">
+                <div id="mars"></div>
+            </div>
+        </div>
+    </div>
+    <div class="container">
         <div class="search-container">
             <input type="text" id="username" placeholder="Enter username to search">
             <button onclick="searchUsername()">Search</button>
@@ -30,9 +544,229 @@
 
         <div class="loading" id="loading">Searching...</div>
         <div class="error" id="error"></div>
-        <div class="results" id="results"></div>
+
+        <div class="results-box">
+            <div class="results-header">
+                <div>Name</div>
+                <div>Category</div>
+                <div>Links</div>
+            </div>
+            <div class="results" id="results"></div>
+        </div>
+        
         <div class="summary" id="summary"></div>
     </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, stars;
+        let mouseX = 0, mouseY = 0;
+        let targetX = 0, targetY = 0;
+        let isHovering = false;
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+        let isMouseMoving = false;
+        let mouseMovementTimeout;
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(0x000000, 0);
+            const starfield = document.getElementById('starfield');
+            starfield.appendChild(renderer.domElement);
+            camera.position.z = 50;
+
+            starfield.addEventListener('mousemove', onMouseMove);
+            starfield.addEventListener('mouseenter', () => isHovering = true);
+            starfield.addEventListener('mouseleave', () => {
+                isHovering = false;
+                isMouseMoving = false;
+                mouseX = 0;
+                mouseY = 0;
+            });
+            starfield.addEventListener('touchmove', onTouchMove, { passive: true });
+            starfield.addEventListener('touchstart', () => isHovering = true);
+            starfield.addEventListener('touchend', () => {
+                isHovering = false;
+                isMouseMoving = false;
+                mouseX = 0;
+                mouseY = 0;
+            });
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+            createStars();
+            animate();
+        }
+
+        function onMouseMove(event) {
+            const rect = event.target.getBoundingClientRect();
+            mouseX = ((event.clientX - rect.left) / rect.width - 0.5) * 2;
+            mouseY = ((event.clientY - rect.top) / rect.height - 0.5) * 2;
+            
+            if (mouseX !== lastMouseX || mouseY !== lastMouseY) {
+                isMouseMoving = true;
+                clearTimeout(mouseMovementTimeout);
+                mouseMovementTimeout = setTimeout(() => {
+                    isMouseMoving = false;
+                }, 50); 
+            }
+            
+            lastMouseX = mouseX;
+            lastMouseY = mouseY;
+        }
+
+        function onTouchMove(event) {
+            if (event.touches.length > 0) {
+                const rect = event.target.getBoundingClientRect();
+                mouseX = ((event.touches[0].clientX - rect.left) / rect.width - 0.5) * 2;
+                mouseY = ((event.touches[0].clientY - rect.top) / rect.height - 0.5) * 2;
+                isMouseMoving = true;
+                clearTimeout(mouseMovementTimeout);
+                mouseMovementTimeout = setTimeout(() => {
+                    isMouseMoving = false;
+                }, 50);
+            }
+        }
+
+        function createStars() {
+            const starsGeometry = new THREE.BufferGeometry();
+            const starCount = 9000;
+            const positions = new Float32Array(starCount * 3);
+            const speeds = new Float32Array(starCount);
+            const directions = new Float32Array(starCount * 3);
+            const baseDirections = new Float32Array(starCount * 3);
+            
+            for (let i = 0; i < starCount; i++) {
+                const i3 = i * 3;
+                positions[i3] = (Math.random() - 0.5) * 1400;
+                positions[i3 + 1] = (Math.random() - 0.5) * 1400;
+                positions[i3 + 2] = (Math.random() - 0.5) * 800;
+                speeds[i] = Math.random() * 0.17 + 0.11;
+                
+                directions[i3] = (Math.random() - 0.5) * 2;
+                directions[i3 + 1] = (Math.random() - 0.5) * 2;
+                directions[i3 + 2] = (Math.random() - 0.5) * 2;
+                
+                const length = Math.sqrt(
+                    directions[i3] * directions[i3] + 
+                    directions[i3 + 1] * directions[i3 + 1] + 
+                    directions[i3 + 2] * directions[i3 + 2]
+                );
+                
+                directions[i3] /= length;
+                directions[i3 + 1] /= length;
+                directions[i3 + 2] /= length;
+                
+                baseDirections[i3] = directions[i3];
+                baseDirections[i3 + 1] = directions[i3 + 1];
+                baseDirections[i3 + 2] = directions[i3 + 2];
+            }
+
+            starsGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            starsGeometry.userData.speeds = speeds;
+            starsGeometry.userData.directions = directions;
+            starsGeometry.userData.baseDirections = baseDirections;
+
+            const starsMaterial = new THREE.PointsMaterial({
+                color: 0xaaaaaa,
+                size: 2,
+                sizeAttenuation: false,
+                map: createCircleTexture(),
+                transparent: true,
+                depthTest: false
+            });
+
+            stars = new THREE.Points(starsGeometry, starsMaterial);
+            scene.add(stars);
+        }
+
+        function createCircleTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const context = canvas.getContext('2d');
+            context.beginPath();
+            context.arc(32, 32, 30, 0, Math.PI * 2);
+            context.closePath();
+            context.fillStyle = '#ffffff';
+            context.fill();
+            const texture = new THREE.Texture(canvas);
+            texture.premultiplyAlpha = true;
+            texture.needsUpdate = true;
+            return texture;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (stars) {
+                if (isHovering) {
+                    targetX += (mouseX - targetX) * 0.5;
+                    targetY += (mouseY - targetY) * 0.5;
+                } else {
+                    targetX *= 0.95;
+                    targetY *= 0.95;
+                }
+
+                const positions = stars.geometry.attributes.position.array;
+                const speeds = stars.geometry.userData.speeds;
+                const directions = stars.geometry.userData.directions;
+                const baseDirections = stars.geometry.userData.baseDirections;
+
+                const mouseWorldX = targetX * 800;
+                const mouseWorldY = -targetY * 800;
+
+                for (let i = 0; i < positions.length / 3; i++) {
+                    const i3 = i * 3;
+                    
+                    let currentSpeed = speeds[i];
+                    
+                    if (isHovering && isMouseMoving) {
+                        const dx = positions[i3] - mouseWorldX;
+                        const dy = positions[i3 + 1] - mouseWorldY;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+                        
+                        if (distance < 375) {
+                            currentSpeed = speeds[i] * (15 * (1 - distance / 375));
+                        }
+                    }
+
+                    positions[i3] += directions[i3] * currentSpeed;
+                    positions[i3 + 1] += directions[i3 + 1] * currentSpeed;
+                    positions[i3 + 2] += directions[i3 + 2] * currentSpeed;
+
+                    if (Math.abs(positions[i3]) > 800 || Math.abs(positions[i3 + 1]) > 800 || Math.abs(positions[i3 + 2]) > 500) {
+                        const edge = Math.floor(Math.random() * 6);
+                        switch(edge) {
+                            case 0: positions[i3] = -800; positions[i3 + 1] = (Math.random() - 0.5) * 1600; positions[i3 + 2] = (Math.random() - 0.5) * 800; break;
+                            case 1: positions[i3] = 800; positions[i3 + 1] = (Math.random() - 0.5) * 1600; positions[i3 + 2] = (Math.random() - 0.5) * 800; break;
+                            case 2: positions[i3] = (Math.random() - 0.5) * 1600; positions[i3 + 1] = 800; positions[i3 + 2] = (Math.random() - 0.5) * 800; break;
+                            case 3: positions[i3] = (Math.random() - 0.5) * 1600; positions[i3 + 1] = -800; positions[i3 + 2] = (Math.random() - 0.5) * 800; break;
+                            case 4: positions[i3] = (Math.random() - 0.5) * 1600; positions[i3 + 1] = (Math.random() - 0.5) * 1600; positions[i3 + 2] = 500; break;
+                            case 5: positions[i3] = (Math.random() - 0.5) * 1600; positions[i3 + 1] = (Math.random() - 0.5) * 1600; positions[i3 + 2] = -500; break;
+                        }
+                        directions[i3] = (Math.random() - 0.5) * 2 - 0.1 * Math.sign(positions[i3]);
+                        directions[i3 + 1] = (Math.random() - 0.5) * 2 - 0.1 * Math.sign(positions[i3 + 1]);
+                        directions[i3 + 2] = (Math.random() - 0.5) * 2 - 0.1 * Math.sign(positions[i3 + 2]);
+                        const length = Math.sqrt(directions[i3] * directions[i3] + directions[i3 + 1] * directions[i3 + 1] + directions[i3 + 2] * directions[i3 + 2]);
+                        directions[i3] /= length;
+                        directions[i3 + 1] /= length;
+                        directions[i3 + 2] /= length;
+                        speeds[i] = Math.random() * 0.12 + 0.08;
+                    }
+                }
+                stars.geometry.attributes.position.needsUpdate = true;
+            }
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
 
     <script>
         const USER_AGENTS = [
@@ -44,6 +778,18 @@
         ];
 
         const API_URL = 'https://keser-api.onrender.com';
+
+        function addResultToDOM(result) {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = 'result-item';
+            div.innerHTML = `
+                <div>${result.name}</div>
+                <div>${result.category}</div>
+                <div><a href="${result.url}" target="_blank" style="color: #4a9eff; text-decoration: none;">View Profile</a></div>
+            `;
+            results.appendChild(div);
+        }
 
         async function fetchMetadata() {
             try {
@@ -79,48 +825,58 @@
 
                 const data = await response.json();
                 
-                // If the request timed out, skip this site
                 if (response.status === 408) {
                     console.log(`Timeout checking ${site.name}, skipping...`);
                     return null;
                 }
 
-                // Additional client-side checks to reduce false positives
-                if (data.exists) {
-                    const commonErrorStrings = ["404", "not found", "error", "does not exist"];
-                    const hasErrorInUrl = commonErrorStrings.some(err => data.final_url.toLowerCase().includes(err));
-                    const hasErrorInText = data.text && commonErrorStrings.some(err => data.text.toLowerCase().includes(err));
+                if (!response.ok) {
+                    console.log(`Error checking ${site.name}: ${data.error || 'Unknown error'}`);
+                    return null;
+                }
 
-                    if (!hasErrorInUrl && !hasErrorInText) {
-                        return {
-                            name: site.name,
-                            url: data.final_url || url,
-                            category: site.cat
-                        };
+                // Common error strings to check in both URL and response text
+                const commonErrorStrings = [
+                    "404", "not found", "error", "does not exist",
+                    "page not found", "no user", "not available",
+                    "profile not found", "user not found"
+                ];
+
+                if (data.exists) {
+                    // Additional validation to prevent false positives
+                    const responseText = (data.text || "").toLowerCase();
+                    const finalUrl = (data.final_url || "").toLowerCase();
+
+                    // Check for error patterns in the final URL
+                    if (commonErrorStrings.some(err => finalUrl.includes(err))) {
+                        return null;
                     }
+
+                    // Check for error patterns in the response text
+                    if (commonErrorStrings.some(err => responseText.includes(err))) {
+                        return null;
+                    }
+
+                    // Validate existence based on e_string and m_string
+                    if (site.e_string && !responseText.includes(site.e_string.toLowerCase())) {
+                        return null;
+                    }
+
+                    if (site.m_string && responseText.includes(site.m_string.toLowerCase())) {
+                        return null;
+                    }
+
+                    return {
+                        name: site.name,
+                        url: data.final_url || url,
+                        category: site.cat
+                    };
                 }
                 return null;
             } catch (error) {
-                console.log(`Error checking ${site.name}:`, error);
+                console.error(`Error checking ${site.name}:`, error);
                 return null;
             }
-        }
-
-        function addResultToDOM(result) {
-            const results = document.getElementById('results');
-            results.style.display = 'block';
-
-            const div = document.createElement('div');
-            div.style.padding = '10px';
-            div.style.margin = '5px';
-            div.style.backgroundColor = '#333';
-            div.innerHTML = `
-                <a href="${result.url}" target="_blank" style="color: lightblue;">
-                    ${result.name}
-                </a>
-                <span style="color: lime; margin-left: 10px;">${result.category}</span>
-            `;
-            results.appendChild(div);
         }
 
         async function searchUsername() {
@@ -130,15 +886,20 @@
                 return;
             }
 
+            // Validate username format
+            const usernameRegex = /^[a-zA-Z0-9_.-]+$/;
+            if (!usernameRegex.test(username)) {
+                showError('Username can only contain letters, numbers, dots, dashes, and underscores');
+                return;
+            }
+
             const loading = document.getElementById('loading');
             const results = document.getElementById('results');
             const error = document.getElementById('error');
             const summary = document.getElementById('summary');
 
-            // Clear previous results
             loading.style.display = 'block';
             results.innerHTML = '';
-            results.style.display = 'block';
             error.style.display = 'none';
             summary.innerHTML = '';
 
@@ -150,21 +911,25 @@
 
                 let foundCount = 0;
                 let errorCount = 0;
+                let checkedCount = 0;
                 const totalSites = metadata.sites.length;
+                const batchSize = 5;
+                const validSites = metadata.sites.filter(site => 
+                    site.uri_check && 
+                    (site.e_string || site.m_string) && 
+                    site.name && 
+                    site.cat
+                );
 
-                // Process sites in parallel
-                const batchSize = 5; // Increase batch size for faster processing
-                for (let i = 0; i < metadata.sites.length; i += batchSize) {
-                    const batch = metadata.sites.slice(i, i + batchSize);
-                    
-                    // Update progress
+                for (let i = 0; i < validSites.length; i += batchSize) {
+                    const batch = validSites.slice(i, i + batchSize);
                     summary.innerHTML = `Checking sites ${i + 1}-${Math.min(i + batchSize, totalSites)} of ${totalSites}...`;
                     
-                    // Process batch in parallel
                     const batchResults = await Promise.all(
                         batch.map(site => 
                             checkUsernameOnWebsite(site, username)
                                 .then(result => {
+                                    checkedCount++;
                                     if (result) {
                                         foundCount++;
                                         addResultToDOM(result);
@@ -173,13 +938,14 @@
                                 })
                                 .catch(error => {
                                     errorCount++;
+                                    checkedCount++;
                                     console.error(`Error with ${site.name}:`, error);
                                     return null;
                                 })
                         )
                     );
 
-                    // Small delay between batches
+                    // Add a small delay between batches to prevent rate limiting
                     await new Promise(resolve => setTimeout(resolve, 100));
                 }
 
@@ -189,8 +955,8 @@
                     showError(`Username '${username}' not found on any sites`);
                 }
 
-                // Show final summary
-                summary.innerHTML = `Search complete | Found: ${foundCount} matches | Errors: ${errorCount}`;
+                const successRate = ((checkedCount - errorCount) / checkedCount * 100).toFixed(1);
+                summary.innerHTML = `Search complete | Found: ${foundCount} matches | Success Rate: ${successRate}% | Total Sites Checked: ${checkedCount}`;
             } catch (error) {
                 loading.style.display = 'none';
                 showError('Search completed with some errors');
@@ -204,17 +970,11 @@
             error.style.display = 'block';
         }
 
-        // Handle Enter key press
         document.getElementById('username').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 searchUsername();
             }
         });
     </script>
-    
-    <!-- Add footer -->
-    <footer style="text-align: center; margin-top: 20px; color: #666;">
-        <p>Keser Username Search Tool</p>
-    </footer>
 </body>
 </html>
