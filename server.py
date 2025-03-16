@@ -3,9 +3,11 @@ from flask_cors import CORS
 import requests
 import json
 import time
+import logging
 from functools import wraps
 
 app = Flask(__name__)
+
 # Configure CORS with specific settings
 CORS(app, resources={
     r"/*": {
@@ -17,6 +19,10 @@ CORS(app, resources={
         "supports_credentials": True
     }
 })
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def rate_limit(f):
     @wraps(f)
@@ -30,6 +36,10 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0"
 ]
+
+def get_random_user_agent():
+    import random
+    return random.choice(USER_AGENTS)
 
 @app.route('/check', methods=['POST', 'OPTIONS'])
 @rate_limit
@@ -51,7 +61,7 @@ def check_username():
         m_code = data.get('m_code', 404)
 
         headers = {
-            'User-Agent': USER_AGENTS[0],
+            'User-Agent': get_random_user_agent(),
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Referer': 'https://www.google.com/',
@@ -70,6 +80,7 @@ def check_username():
                 verify=False  # Disable SSL verification for problematic sites
             )
         except requests.Timeout:
+            logger.warning(f"Request timed out for URL: {url}")
             return jsonify({
                 'error': 'Request timed out',
                 'exists': False,
@@ -77,6 +88,7 @@ def check_username():
                 'final_url': url
             }), 408
         except requests.RequestException as e:
+            logger.error(f"Request failed for URL: {url}. Error: {str(e)}")
             return jsonify({
                 'error': str(e),
                 'exists': False,
@@ -94,6 +106,7 @@ def check_username():
         
         exists = False
         
+        # Check for existence based on e_string and m_string
         if e_string and e_string.lower() in response.text.lower():
             if m_string:
                 exists = m_string.lower() not in response.text.lower()
@@ -104,11 +117,13 @@ def check_username():
         else:
             if response.status_code == e_code:
                 exists = True
+                # Check for common error strings in response text
                 for error_string in common_error_strings:
                     if error_string.lower() in response.text.lower():
                         exists = False
                         break
             
+            # Check for error patterns in the final URL
             if exists and any(err in final_url.lower() for err in ["404", "error", "not-found"]):
                 exists = False
 
@@ -118,10 +133,12 @@ def check_username():
             'final_url': final_url
         }
         
+        logger.info(f"Checked URL: {url}. Exists: {exists}")
         response = jsonify(result)
         return response
 
     except Exception as e:
+        logger.error(f"Internal server error: {str(e)}")
         return jsonify({'error': 'Internal server error', 'exists': False}), 500
 
 @app.route('/metadata', methods=['GET', 'OPTIONS'])
@@ -142,6 +159,7 @@ def get_metadata():
             response = jsonify({'sites': sites})
             return response
     except Exception as e:
+        logger.error(f"Failed to load metadata: {str(e)}")
         return jsonify({'error': f'Failed to load metadata: {str(e)}'}), 500
 
 @app.route('/')
@@ -151,4 +169,4 @@ def home():
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
 else:
-    application = app 
+    application = app
