@@ -805,6 +805,54 @@
             }
         }
 
+        async function checkUsernameOnWebsite(site, username) {
+            const url = site.uri_check.replace("{account}", username);
+            
+            try {
+                const response = await fetch(`${API_URL}/check`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        url,
+                        e_string: site.e_string,
+                        m_string: site.m_string,
+                        e_code: site.e_code || 200,
+                        m_code: site.m_code || 404
+                    })
+                });
+
+                if (!response.ok) {
+                    console.log(`Failed check for ${site.name}: ${response.status}`);
+                    return null;
+                }
+
+                const data = await response.json();
+                
+                if (!data || response.status === 408) {
+                    console.log(`Timeout/no data for ${site.name}`);
+                    return null;
+                }
+
+                if (data.exists) {
+                    console.log(`Found match for ${site.name}: ${data.final_url}`);
+                    return {
+                        name: site.name,
+                        url: data.final_url || url,
+                        category: site.cat
+                    };
+                }
+                
+                console.log(`No match for ${site.name}`);
+                return null;
+
+            } catch (error) {
+                console.log(`Error checking ${site.name}: ${error.message}`);
+                return null;
+            }
+        }
+
         async function searchUsername() {
             const username = document.getElementById('username').value.trim();
             if (!username) {
@@ -837,6 +885,7 @@
                 let foundCount = 0;
                 let errorCount = 0;
                 let checkedCount = 0;
+                let foundSites = [];
 
                 // Filter valid sites first
                 const validSites = metadata.sites.filter(site => 
@@ -847,50 +896,38 @@
                 );
 
                 const totalSites = validSites.length;
-                const batchSize = 30; // Increased batch size
                 const startTime = Date.now();
 
-                // More frequent progress updates
+                // Update progress every 100ms
                 const progressInterval = setInterval(() => {
                     const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(1);
                     summary.innerHTML = `Searching... ${checkedCount}/${totalSites} sites checked (${elapsedTime}s)`;
                 }, 100);
 
-                // Process all sites in parallel batches
-                const processBatch = async (sites) => {
-                    const results = await Promise.all(
-                        sites.map(site => 
-                            checkUsernameOnWebsite(site, username)
-                                .then(result => {
-                                    checkedCount++;
-                                    if (result) {
-                                        foundCount++;
-                                        addResultToDOM(result);
-                                    }
-                                    return result;
-                                })
-                                .catch(() => {
-                                    errorCount++;
-                                    checkedCount++;
-                                    return null;
-                                })
-                        )
-                    );
-                    return results.filter(Boolean);
-                };
+                // Process all sites
+                const results = await Promise.all(
+                    validSites.map(site => 
+                        checkUsernameOnWebsite(site, username)
+                            .then(result => {
+                                checkedCount++;
+                                if (result) {
+                                    foundCount++;
+                                    foundSites.push(result);
+                                }
+                                return result;
+                            })
+                            .catch(error => {
+                                errorCount++;
+                                checkedCount++;
+                                console.error(`Error processing ${site.name}:`, error);
+                                return null;
+                            })
+                    )
+                );
 
-                // Split sites into batches
-                const batches = [];
-                for (let i = 0; i < validSites.length; i += batchSize) {
-                    batches.push(validSites.slice(i, i + batchSize));
-                }
-
-                // Process all batches
-                for (const batch of batches) {
-                    await processBatch(batch);
-                    // Small delay between batches to prevent overwhelming
-                    await new Promise(resolve => setTimeout(resolve, 50));
-                }
+                // Sort and display results
+                foundSites.sort((a, b) => a.name.localeCompare(b.name));
+                foundSites.forEach(result => addResultToDOM(result));
 
                 clearInterval(progressInterval);
                 loading.style.display = 'none';
@@ -910,65 +947,6 @@
             }
         }
 
-        async function checkUsernameOnWebsite(site, username) {
-            const url = site.uri_check.replace("{account}", username);
-            
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 8000); // Increased timeout to 8 seconds per request
-
-                const response = await fetch(`${API_URL}/check`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ 
-                        url,
-                        e_string: site.e_string,
-                        m_string: site.m_string,
-                        e_code: site.e_code || 200,
-                        m_code: site.m_code || 404
-                    }),
-                    signal: controller.signal
-                });
-
-                clearTimeout(timeoutId);
-                
-                if (!response.ok) {
-                    return null;
-                }
-
-                const data = await response.json();
-                
-                if (response.status === 408 || !data) {
-                    return null;
-                }
-
-                if (data.exists) {
-                    const responseText = (data.text || "").toLowerCase();
-                    const finalUrl = (data.final_url || "").toLowerCase();
-
-                    // Thorough validation
-                    if ((site.e_string && !responseText.includes(site.e_string.toLowerCase())) ||
-                        (site.m_string && responseText.includes(site.m_string.toLowerCase())) ||
-                        finalUrl.includes("404") || 
-                        finalUrl.includes("error") ||
-                        finalUrl.includes("not-found")) {
-                        return null;
-                    }
-
-                    return {
-                        name: site.name,
-                        url: data.final_url || url,
-                        category: site.cat
-                    };
-                }
-                return null;
-            } catch (error) {
-                return null;
-            }
-        }
-
         function showError(message) {
             const error = document.getElementById('error');
             error.textContent = message;
@@ -981,7 +959,5 @@
             }
         });
     </script>
-</body>
-</html>
 </body>
 </html>
