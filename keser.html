@@ -7,112 +7,7 @@
     <meta name="keywords" content="username search, social media, account finder">
     <title>Keser - Username Search</title>
     <style>
-        :root {
-            --primary-color: rgb(255, 20, 147);
-            --secondary-color: rgb(173, 216, 230);
-            --background-color: #1a1a1a;
-            --text-color: #fff;
-        }
-
-        body {
-            margin: 0;
-            padding: 20px;
-            background: var(--background-color);
-            color: var(--text-color);
-            font-family: 'Courier New', monospace;
-        }
-
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-        }
-
-        .banner {
-            text-align: center;
-            margin-bottom: 30px;
-            font-size: 1.2em;
-        }
-
-        .banner pre {
-            color: var(--primary-color);
-            margin: 0;
-        }
-
-        .search-container {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-
-        input[type="text"] {
-            flex: 1;
-            padding: 10px;
-            background: #2a2a2a;
-            border: 1px solid #444;
-            color: var(--text-color);
-            border-radius: 4px;
-        }
-
-        button {
-            padding: 10px 20px;
-            background: var(--primary-color);
-            color: var(--text-color);
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: opacity 0.3s;
-        }
-
-        button:hover {
-            opacity: 0.9;
-        }
-
-        .results {
-            background: #2a2a2a;
-            padding: 20px;
-            border-radius: 4px;
-            margin-top: 20px;
-            max-height: 500px;
-            overflow-y: auto;
-        }
-
-        .result-item {
-            margin-bottom: 10px;
-            padding: 10px;
-            background: #333;
-            border-radius: 4px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .result-item a {
-            color: var(--secondary-color);
-            text-decoration: none;
-        }
-
-        .result-item .category {
-            color: #0f0;
-            margin-left: 10px;
-        }
-
-        .loading {
-            text-align: center;
-            color: var(--secondary-color);
-            margin: 20px 0;
-            display: none;
-        }
-
-        .error {
-            color: #ff0000;
-            margin: 10px 0;
-            display: none;
-        }
-
-        .summary {
-            margin-top: 20px;
-            color: #ffd700;
-        }
+        /* Your existing CSS styles */
     </style>
 </head>
 <body>
@@ -148,15 +43,6 @@
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/600.8.9 (KHTML, like Gecko) Version/8.0.8 Safari/600.8.9",
         ];
 
-        const PROXY_SERVICES = [
-            (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-            (url) => `https://bypass.duti.tech/url/${encodeURIComponent(url)}`,
-            (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-            (url) => `https://cors.isteed.cc/proxy/${encodeURIComponent(url)}`,
-            (url) => `https://cors-anywhere.herokuapp.com/${url}`
-        ];
-
         const API_URL = 'https://keser-api.onrender.com';
 
         async function fetchMetadata() {
@@ -168,47 +54,8 @@
                 return await response.json();
             } catch (error) {
                 console.error('Error fetching metadata:', error);
+                showError('Failed to fetch metadata. Please try again later.');
                 return null;
-            }
-        }
-
-        function getRandomUserAgent() {
-            return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-        }
-
-        async function tryProxyRequest(url, proxyIndex = 0) {
-            if (proxyIndex >= PROXY_SERVICES.length) {
-                return null;
-            }
-
-            try {
-                const proxyUrl = PROXY_SERVICES[proxyIndex](url);
-                const response = await fetch(proxyUrl, {
-                    headers: {
-                        "User-Agent": getRandomUserAgent(),
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                        "Accept-Language": "en-US,en;q=0.5",
-                        "Referer": "https://www.google.com/",
-                        "DNT": "1",
-                        "Connection": "keep-alive",
-                        "Upgrade-Insecure-Requests": "1"
-                    },
-                    mode: 'cors'
-                });
-
-                if (!response.ok) {
-                    throw new Error('Response not ok');
-                }
-
-                const text = await response.text();
-                return {
-                    status: response.status,
-                    text: text
-                };
-            } catch (error) {
-                // Try next proxy service after a small delay
-                await new Promise(resolve => setTimeout(resolve, 100));
-                return tryProxyRequest(url, proxyIndex + 1);
             }
         }
 
@@ -238,12 +85,19 @@
                     return null;
                 }
 
+                // Additional client-side checks to reduce false positives
                 if (data.exists) {
-                    return {
-                        name: site.name,
-                        url: data.final_url || url,
-                        category: site.cat
-                    };
+                    const commonErrorStrings = ["404", "not found", "error", "does not exist"];
+                    const hasErrorInUrl = commonErrorStrings.some(err => data.final_url.toLowerCase().includes(err));
+                    const hasErrorInText = data.text && commonErrorStrings.some(err => data.text.toLowerCase().includes(err));
+
+                    if (!hasErrorInUrl && !hasErrorInText) {
+                        return {
+                            name: site.name,
+                            url: data.final_url || url,
+                            category: site.cat
+                        };
+                    }
                 }
                 return null;
             } catch (error) {
@@ -254,9 +108,8 @@
 
         function addResultToDOM(result) {
             const results = document.getElementById('results');
-            results.style.display = 'block';  // Make sure it's visible
+            results.style.display = 'block';
 
-            // Create a simple div with the result
             const div = document.createElement('div');
             div.style.padding = '10px';
             div.style.margin = '5px';
@@ -267,7 +120,6 @@
                 </a>
                 <span style="color: lime; margin-left: 10px;">${result.category}</span>
             `;
-            
             results.appendChild(div);
         }
 
@@ -297,12 +149,11 @@
                 }
 
                 let foundCount = 0;
-                let timeoutCount = 0;
                 let errorCount = 0;
                 const totalSites = metadata.sites.length;
 
-                // Process sites in smaller batches
-                const batchSize = 3;
+                // Process sites in parallel
+                const batchSize = 5; // Increase batch size for faster processing
                 for (let i = 0; i < metadata.sites.length; i += batchSize) {
                     const batch = metadata.sites.slice(i, i + batchSize);
                     
@@ -310,21 +161,21 @@
                     summary.innerHTML = `Checking sites ${i + 1}-${Math.min(i + batchSize, totalSites)} of ${totalSites}...`;
                     
                     // Process batch in parallel
-                    const results = await Promise.all(
+                    const batchResults = await Promise.all(
                         batch.map(site => 
                             checkUsernameOnWebsite(site, username)
-                            .then(result => {
-                                if (result) {
-                                    foundCount++;
-                                    addResultToDOM(result);
-                                }
-                                return result;
-                            })
-                            .catch(error => {
-                                errorCount++;
-                                console.error(`Error with ${site.name}:`, error);
-                                return null;
-                            })
+                                .then(result => {
+                                    if (result) {
+                                        foundCount++;
+                                        addResultToDOM(result);
+                                    }
+                                    return result;
+                                })
+                                .catch(error => {
+                                    errorCount++;
+                                    console.error(`Error with ${site.name}:`, error);
+                                    return null;
+                                })
                         )
                     );
 
@@ -366,4 +217,4 @@
         <p>Keser Username Search Tool</p>
     </footer>
 </body>
-</html> 
+</html>
