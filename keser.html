@@ -805,63 +805,6 @@
             }
         }
 
-        async function checkUsernameOnWebsite(site, username) {
-            const url = site.uri_check.replace("{account}", username);
-            
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 2000); // Reduced to 2 second timeout per request
-
-                const response = await fetch(`${API_URL}/check`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ 
-                        url,
-                        e_string: site.e_string,
-                        m_string: site.m_string,
-                        e_code: site.e_code || 200,
-                        m_code: site.m_code || 404
-                    }),
-                    signal: controller.signal
-                });
-
-                clearTimeout(timeoutId);
-                
-                if (!response.ok) {
-                    return null;
-                }
-
-                const data = await response.json();
-                
-                if (response.status === 408 || !data) {
-                    return null;
-                }
-
-                if (data.exists) {
-                    const responseText = (data.text || "").toLowerCase();
-                    const finalUrl = (data.final_url || "").toLowerCase();
-
-                    // Quick validation to reduce processing time
-                    if (finalUrl.includes("404") || finalUrl.includes("error") ||
-                        (site.e_string && !responseText.includes(site.e_string.toLowerCase())) ||
-                        (site.m_string && responseText.includes(site.m_string.toLowerCase()))) {
-                        return null;
-                    }
-
-                    return {
-                        name: site.name,
-                        url: data.final_url || url,
-                        category: site.cat
-                    };
-                }
-                return null;
-            } catch (error) {
-                return null;
-            }
-        }
-
         async function searchUsername() {
             const username = document.getElementById('username').value.trim();
             if (!username) {
@@ -904,15 +847,14 @@
                 );
 
                 const totalSites = validSites.length;
-                const batchSize = 25; // Increased batch size for faster processing
-                const searchTimeout = 15000; // 15 seconds total timeout
+                const batchSize = 30; // Increased batch size
                 const startTime = Date.now();
 
                 // More frequent progress updates
                 const progressInterval = setInterval(() => {
                     const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(1);
                     summary.innerHTML = `Searching... ${checkedCount}/${totalSites} sites checked (${elapsedTime}s)`;
-                }, 50);
+                }, 100);
 
                 // Process all sites in parallel batches
                 const processBatch = async (sites) => {
@@ -937,32 +879,18 @@
                     return results.filter(Boolean);
                 };
 
-                // Split sites into batches and process them
+                // Split sites into batches
                 const batches = [];
                 for (let i = 0; i < validSites.length; i += batchSize) {
                     batches.push(validSites.slice(i, i + batchSize));
                 }
 
-                // Process all batches with minimal delay
-                const searchPromise = async () => {
-                    for (const batch of batches) {
-                        await processBatch(batch);
-                        // Minimal delay between batches to prevent overwhelming
-                        await new Promise(resolve => setTimeout(resolve, 10));
-                    }
-                };
-
-                // Race between search and timeout
-                await Promise.race([
-                    searchPromise(),
-                    new Promise((_, reject) => 
-                        setTimeout(() => reject(new Error('Search timeout')), searchTimeout)
-                    )
-                ]).catch(error => {
-                    if (error.message === 'Search timeout') {
-                        console.log('Search timed out, showing partial results');
-                    }
-                });
+                // Process all batches
+                for (const batch of batches) {
+                    await processBatch(batch);
+                    // Small delay between batches to prevent overwhelming
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
 
                 clearInterval(progressInterval);
                 loading.style.display = 'none';
@@ -982,6 +910,65 @@
             }
         }
 
+        async function checkUsernameOnWebsite(site, username) {
+            const url = site.uri_check.replace("{account}", username);
+            
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 8000); // Increased timeout to 8 seconds per request
+
+                const response = await fetch(`${API_URL}/check`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        url,
+                        e_string: site.e_string,
+                        m_string: site.m_string,
+                        e_code: site.e_code || 200,
+                        m_code: site.m_code || 404
+                    }),
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    return null;
+                }
+
+                const data = await response.json();
+                
+                if (response.status === 408 || !data) {
+                    return null;
+                }
+
+                if (data.exists) {
+                    const responseText = (data.text || "").toLowerCase();
+                    const finalUrl = (data.final_url || "").toLowerCase();
+
+                    // Thorough validation
+                    if ((site.e_string && !responseText.includes(site.e_string.toLowerCase())) ||
+                        (site.m_string && responseText.includes(site.m_string.toLowerCase())) ||
+                        finalUrl.includes("404") || 
+                        finalUrl.includes("error") ||
+                        finalUrl.includes("not-found")) {
+                        return null;
+                    }
+
+                    return {
+                        name: site.name,
+                        url: data.final_url || url,
+                        category: site.cat
+                    };
+                }
+                return null;
+            } catch (error) {
+                return null;
+            }
+        }
+
         function showError(message) {
             const error = document.getElementById('error');
             error.textContent = message;
@@ -994,5 +981,7 @@
             }
         });
     </script>
+</body>
+</html>
 </body>
 </html>
