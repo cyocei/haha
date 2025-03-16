@@ -138,6 +138,23 @@
     </div>
 
     <script>
+        const USER_AGENTS = [
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko",
+            "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:40.0) Gecko/20100101 Firefox/40.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/600.8.9 (KHTML, like Gecko) Version/8.0.8 Safari/600.8.9",
+        ];
+
+        const PROXY_SERVICES = [
+            (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+            (url) => `https://bypass.duti.tech/url/${encodeURIComponent(url)}`,
+            (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+            (url) => `https://cors.isteed.cc/proxy/${encodeURIComponent(url)}`,
+            (url) => `https://cors-anywhere.herokuapp.com/${url}`
+        ];
+
         const API_URL = 'https://keser-api.onrender.com';
 
         async function fetchMetadata() {
@@ -149,6 +166,97 @@
                 return await response.json();
             } catch (error) {
                 console.error('Error fetching metadata:', error);
+                return null;
+            }
+        }
+
+        function getRandomUserAgent() {
+            return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+        }
+
+        async function tryProxyRequest(url, proxyIndex = 0) {
+            if (proxyIndex >= PROXY_SERVICES.length) {
+                return null;
+            }
+
+            try {
+                const proxyUrl = PROXY_SERVICES[proxyIndex](url);
+                const response = await fetch(proxyUrl, {
+                    headers: {
+                        "User-Agent": getRandomUserAgent(),
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.5",
+                        "Referer": "https://www.google.com/",
+                        "DNT": "1",
+                        "Connection": "keep-alive",
+                        "Upgrade-Insecure-Requests": "1"
+                    },
+                    mode: 'cors'
+                });
+
+                if (!response.ok) {
+                    throw new Error('Response not ok');
+                }
+
+                const text = await response.text();
+                return {
+                    status: response.status,
+                    text: text
+                };
+            } catch (error) {
+                // Try next proxy service after a small delay
+                await new Promise(resolve => setTimeout(resolve, 100));
+                return tryProxyRequest(url, proxyIndex + 1);
+            }
+        }
+
+        async function checkUsernameOnWebsite(site, username) {
+            const url = site.uri_check.replace("{account}", username);
+            
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+
+                const response = await fetch(`${API_URL}/check`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        url,
+                        e_string: site.e_string,
+                        m_string: site.m_string
+                    }),
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    throw new Error('API request failed');
+                }
+
+                const data = await response.json();
+                const { status, text } = data;
+
+                if (site.e_string && text.includes(site.e_string)) {
+                    return null;
+                }
+                
+                if (site.m_string && !text.includes(site.m_string)) {
+                    return null;
+                }
+
+                if (status === 200) {
+                    return {
+                        name: site.name,
+                        url: url,
+                        category: site.cat
+                    };
+                }
+
+                return null;
+            } catch (error) {
                 return null;
             }
         }
@@ -234,51 +342,6 @@
             }
         }
 
-        async function checkUsernameOnWebsite(site, username) {
-            const url = site.uri_check.replace("{account}", username);
-            
-            try {
-                const response = await fetch(`${API_URL}/check`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ 
-                        url,
-                        e_string: site.e_string,
-                        m_string: site.m_string
-                    })
-                });
-
-                if (!response.ok) {
-                    throw new Error('API request failed');
-                }
-
-                const data = await response.json();
-                const { status, text } = data;
-
-                if (site.e_string && text.includes(site.e_string)) {
-                    return null;
-                }
-                
-                if (site.m_string && !text.includes(site.m_string)) {
-                    return null;
-                }
-
-                if (status === 200) {
-                    return {
-                        name: site.name,
-                        url: url,
-                        category: site.cat
-                    };
-                }
-
-                return null;
-            } catch (error) {
-                return null;
-            }
-        }
-
         function addResultToDOM(result) {
             const results = document.getElementById('results');
             const resultItem = document.createElement('div');
@@ -287,7 +350,7 @@
                 <a href="${result.url}" target="_blank">${result.name}</a>
                 <span class="category">${result.category}</span>
             `;
-            results.insertBefore(resultItem, results.firstChild);
+            results.insertBefore(resultItem, results.firstChild); // Add new results at the top
             
             // Scroll to the top of results if not visible
             if (results.scrollTop > 0) {
