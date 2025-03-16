@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keser - Username Search</title>
+    <style>
+        :root {
+            --primary-color: rgb(255, 20, 147);
+            --secondary-color: rgb(173, 216, 230);
+            --background-color: #1a1a1a;
+            --text-color: #fff;
+        }
+
+        body {
+            margin: 0;
+            padding: 20px;
+            background: var(--background-color);
+            color: var(--text-color);
+            font-family: 'Courier New', monospace;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        .banner {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 1.2em;
+        }
+
+        .banner pre {
+            color: var(--primary-color);
+            margin: 0;
+        }
+
+        .search-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            color: var(--text-color);
+            border-radius: 4px;
+        }
+
+        button {
+            padding: 10px 20px;
+            background: var(--primary-color);
+            color: var(--text-color);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: opacity 0.3s;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        .results {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 4px;
+            margin-top: 20px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .result-item {
+            margin-bottom: 10px;
+            padding: 10px;
+            background: #333;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .result-item a {
+            color: var(--secondary-color);
+            text-decoration: none;
+        }
+
+        .result-item .category {
+            color: #0f0;
+            margin-left: 10px;
+        }
+
+        .loading {
+            text-align: center;
+            color: var(--secondary-color);
+            margin: 20px 0;
+            display: none;
+        }
+
+        .error {
+            color: #ff0000;
+            margin: 10px 0;
+            display: none;
+        }
+
+        .summary {
+            margin-top: 20px;
+            color: #ffd700;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="banner">
+            <pre>
+.-. .-..----. .----..----..----. 
+| |/ / | {_  { {__  | {_  | {}  }
+| |\ \ | {__ .-._} }| {__ | .-. \
+`-' `-'`----'`----' `----'`-' `-'
+            </pre>
+            <div style="color: #800080;">The Advance Username Search.</div>
+            <div style="color: #800080;">~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~ ~</div>
+        </div>
+
+        <div class="search-container">
+            <input type="text" id="username" placeholder="Enter username to search">
+            <button onclick="searchUsername()">Search</button>
+        </div>
+
+        <div class="loading" id="loading">Searching...</div>
+        <div class="error" id="error"></div>
+        <div class="results" id="results"></div>
+        <div class="summary" id="summary"></div>
+    </div>
+
+    <script>
+        const API_URL = 'https://keser-api.onrender.com';
+
+        async function fetchMetadata() {
+            try {
+                const response = await fetch(`${API_URL}/metadata`);
+                if (!response.ok) {
+                    throw new Error('Failed to fetch metadata');
+                }
+                return await response.json();
+            } catch (error) {
+                console.error('Error fetching metadata:', error);
+                return null;
+            }
+        }
+
+        async function searchUsername() {
+            const username = document.getElementById('username').value.trim();
+            if (!username) {
+                showError('Please enter a username');
+                return;
+            }
+
+            const loading = document.getElementById('loading');
+            const results = document.getElementById('results');
+            const summary = document.getElementById('summary');
+            const error = document.getElementById('error');
+
+            loading.style.display = 'block';
+            results.innerHTML = '';
+            summary.innerHTML = '';
+            error.style.display = 'none';
+
+            try {
+                const metadata = await fetchMetadata();
+                if (!metadata) {
+                    throw new Error('Failed to fetch metadata');
+                }
+
+                const startTime = performance.now();
+                let foundCount = 0;
+                let processedCount = 0;
+                const totalSites = metadata.sites.length;
+
+                // Process sites in parallel with controlled batch sizes
+                const batchSize = 10; // Process 10 sites at a time
+                const maxTime = 15000; // 15 seconds max
+                const timeoutPromise = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('Time limit exceeded')), maxTime)
+                );
+
+                for (let i = 0; i < metadata.sites.length; i += batchSize) {
+                    const batch = metadata.sites.slice(i, i + batchSize);
+                    const batchPromises = batch.map(site => 
+                        checkUsernameOnWebsite(site, username)
+                            .then(result => {
+                                processedCount++;
+                                if (result) {
+                                    foundCount++;
+                                    addResultToDOM(result);
+                                }
+                                const currentTime = ((performance.now() - startTime) / 1000).toFixed(2);
+                                summary.innerHTML = `Progress: ${processedCount}/${totalSites} sites checked | Found: ${foundCount} | Time: ${currentTime}s`;
+                            })
+                            .catch(() => {
+                                processedCount++;
+                            })
+                    );
+
+                    try {
+                        await Promise.race([
+                            Promise.all(batchPromises),
+                            timeoutPromise
+                        ]);
+                    } catch (error) {
+                        if (error.message === 'Time limit exceeded') {
+                            break; // Stop processing if we hit the time limit
+                        }
+                        throw error;
+                    }
+                }
+
+                const endTime = performance.now();
+                const searchTime = ((endTime - startTime) / 1000).toFixed(2);
+
+                if (foundCount === 0) {
+                    showError(`Username '${username}' not found on any sites`);
+                }
+                summary.innerHTML = `Search complete | Found: ${foundCount} sites for '${username}' | Time: ${searchTime}s`;
+            } catch (error) {
+                showError('Search completed with some errors');
+                console.error(error);
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+
+        async function checkUsernameOnWebsite(site, username) {
+            const url = site.uri_check.replace("{account}", username);
+            
+            try {
+                const response = await fetch(`${API_URL}/check`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        url,
+                        e_string: site.e_string,
+                        m_string: site.m_string
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('API request failed');
+                }
+
+                const data = await response.json();
+                const { status, text } = data;
+
+                if (site.e_string && text.includes(site.e_string)) {
+                    return null;
+                }
+                
+                if (site.m_string && !text.includes(site.m_string)) {
+                    return null;
+                }
+
+                if (status === 200) {
+                    return {
+                        name: site.name,
+                        url: url,
+                        category: site.cat
+                    };
+                }
+
+                return null;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function addResultToDOM(result) {
+            const results = document.getElementById('results');
+            const resultItem = document.createElement('div');
+            resultItem.className = 'result-item';
+            resultItem.innerHTML = `
+                <a href="${result.url}" target="_blank">${result.name}</a>
+                <span class="category">${result.category}</span>
+            `;
+            results.insertBefore(resultItem, results.firstChild);
+            
+            // Scroll to the top of results if not visible
+            if (results.scrollTop > 0) {
+                results.scrollTop = 0;
+            }
+        }
+
+        function showError(message) {
+            const error = document.getElementById('error');
+            error.textContent = message;
+            error.style.display = 'block';
+        }
+
+        // Handle Enter key press
+        document.getElementById('username').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                searchUsername();
+            }
+        });
+    </script>
+</body>
+</html> 
