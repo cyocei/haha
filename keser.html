@@ -809,6 +809,9 @@
             const url = site.uri_check.replace("{account}", username);
             
             try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 2000); // Reduced to 2 second timeout per request
+
                 const response = await fetch(`${API_URL}/check`, {
                     method: 'POST',
                     headers: {
@@ -820,49 +823,30 @@
                         m_string: site.m_string,
                         e_code: site.e_code || 200,
                         m_code: site.m_code || 404
-                    })
+                    }),
+                    signal: controller.signal
                 });
+
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    return null;
+                }
 
                 const data = await response.json();
                 
-                if (response.status === 408) {
-                    console.log(`Timeout checking ${site.name}, skipping...`);
+                if (response.status === 408 || !data) {
                     return null;
                 }
-
-                if (!response.ok) {
-                    console.log(`Error checking ${site.name}: ${data.error || 'Unknown error'}`);
-                    return null;
-                }
-
-                // Common error strings to check in both URL and response text
-                const commonErrorStrings = [
-                    "404", "not found", "error", "does not exist",
-                    "page not found", "no user", "not available",
-                    "profile not found", "user not found"
-                ];
 
                 if (data.exists) {
-                    // Additional validation to prevent false positives
                     const responseText = (data.text || "").toLowerCase();
                     const finalUrl = (data.final_url || "").toLowerCase();
 
-                    // Check for error patterns in the final URL
-                    if (commonErrorStrings.some(err => finalUrl.includes(err))) {
-                        return null;
-                    }
-
-                    // Check for error patterns in the response text
-                    if (commonErrorStrings.some(err => responseText.includes(err))) {
-                        return null;
-                    }
-
-                    // Validate existence based on e_string and m_string
-                    if (site.e_string && !responseText.includes(site.e_string.toLowerCase())) {
-                        return null;
-                    }
-
-                    if (site.m_string && responseText.includes(site.m_string.toLowerCase())) {
+                    // Quick validation to reduce processing time
+                    if (finalUrl.includes("404") || finalUrl.includes("error") ||
+                        (site.e_string && !responseText.includes(site.e_string.toLowerCase())) ||
+                        (site.m_string && responseText.includes(site.m_string.toLowerCase()))) {
                         return null;
                     }
 
@@ -874,7 +858,6 @@
                 }
                 return null;
             } catch (error) {
-                console.error(`Error checking ${site.name}:`, error);
                 return null;
             }
         }
@@ -886,7 +869,6 @@
                 return;
             }
 
-            // Validate username format
             const usernameRegex = /^[a-zA-Z0-9_.-]+$/;
             if (!usernameRegex.test(username)) {
                 showError('Username can only contain letters, numbers, dots, dashes, and underscores');
@@ -912,8 +894,8 @@
                 let foundCount = 0;
                 let errorCount = 0;
                 let checkedCount = 0;
-                const totalSites = metadata.sites.length;
-                const batchSize = 5;
+
+                // Filter valid sites first
                 const validSites = metadata.sites.filter(site => 
                     site.uri_check && 
                     (site.e_string || site.m_string) && 
@@ -921,12 +903,21 @@
                     site.cat
                 );
 
-                for (let i = 0; i < validSites.length; i += batchSize) {
-                    const batch = validSites.slice(i, i + batchSize);
-                    summary.innerHTML = `Checking sites ${i + 1}-${Math.min(i + batchSize, totalSites)} of ${totalSites}...`;
-                    
-                    const batchResults = await Promise.all(
-                        batch.map(site => 
+                const totalSites = validSites.length;
+                const batchSize = 25; // Increased batch size for faster processing
+                const searchTimeout = 15000; // 15 seconds total timeout
+                const startTime = Date.now();
+
+                // More frequent progress updates
+                const progressInterval = setInterval(() => {
+                    const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(1);
+                    summary.innerHTML = `Searching... ${checkedCount}/${totalSites} sites checked (${elapsedTime}s)`;
+                }, 50);
+
+                // Process all sites in parallel batches
+                const processBatch = async (sites) => {
+                    const results = await Promise.all(
+                        sites.map(site => 
                             checkUsernameOnWebsite(site, username)
                                 .then(result => {
                                     checkedCount++;
@@ -936,27 +927,54 @@
                                     }
                                     return result;
                                 })
-                                .catch(error => {
+                                .catch(() => {
                                     errorCount++;
                                     checkedCount++;
-                                    console.error(`Error with ${site.name}:`, error);
                                     return null;
                                 })
                         )
                     );
+                    return results.filter(Boolean);
+                };
 
-                    // Add a small delay between batches to prevent rate limiting
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                // Split sites into batches and process them
+                const batches = [];
+                for (let i = 0; i < validSites.length; i += batchSize) {
+                    batches.push(validSites.slice(i, i + batchSize));
                 }
 
+                // Process all batches with minimal delay
+                const searchPromise = async () => {
+                    for (const batch of batches) {
+                        await processBatch(batch);
+                        // Minimal delay between batches to prevent overwhelming
+                        await new Promise(resolve => setTimeout(resolve, 10));
+                    }
+                };
+
+                // Race between search and timeout
+                await Promise.race([
+                    searchPromise(),
+                    new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Search timeout')), searchTimeout)
+                    )
+                ]).catch(error => {
+                    if (error.message === 'Search timeout') {
+                        console.log('Search timed out, showing partial results');
+                    }
+                });
+
+                clearInterval(progressInterval);
                 loading.style.display = 'none';
-                
+
+                const elapsedTime = ((Date.now() - startTime) / 1000).toFixed(1);
+                const successRate = ((checkedCount - errorCount) / checkedCount * 100).toFixed(1);
+
                 if (foundCount === 0) {
                     showError(`Username '${username}' not found on any sites`);
                 }
 
-                const successRate = ((checkedCount - errorCount) / checkedCount * 100).toFixed(1);
-                summary.innerHTML = `Search complete | Found: ${foundCount} matches | Success Rate: ${successRate}% | Total Sites Checked: ${checkedCount}`;
+                summary.innerHTML = `Search complete in ${elapsedTime}s | Found: ${foundCount} matches | Success Rate: ${successRate}% | Sites Checked: ${checkedCount}/${totalSites}`;
             } catch (error) {
                 loading.style.display = 'none';
                 showError('Search completed with some errors');
