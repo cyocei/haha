@@ -5,27 +5,15 @@ import logging
 import os
 import aiohttp
 import asyncio
-from datetime import datetime
-import random
-import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
-import signal
 
 app = Flask(__name__)
-app.debug = False
-
-# Enable CORS
-CORS(app, resources={r"/*": {"origins": ["https://vbiskit.com"], "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]}})
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+CORS(app, resources={r"/*": {"origins": "*"}})
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Number of workers for multiprocessing
-NUM_WORKERS = multiprocessing.cpu_count() * 4  # Use more workers
-
-# Your existing USER_AGENTS list
+# Single user agent (add the rest as needed)
 USER_AGENTS = [
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
+   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
     "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36",
     "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko",
     "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:40.0) Gecko/20100101 Firefox/40.0",
@@ -134,124 +122,92 @@ USER_AGENTS = [
 ]
 
 def get_random_user_agent():
+    import random
     return random.choice(USER_AGENTS)
 
-# Global session pool
-SESSION_POOL = None
-MAX_CONNECTIONS = 1000  # High connection limit
-
-async def setup_session_pool():
-    global SESSION_POOL
-    if SESSION_POOL is None:
-        # Use Cloudflare DNS for faster lookups
-        resolver = aiohttp.resolver.AsyncResolver(nameservers=["1.1.1.1", "1.0.0.1"])
-        
-        # Configure for maximum throughput
-        connector = aiohttp.TCPConnector(
-            limit=MAX_CONNECTIONS,
-            resolver=resolver,
-            ttl_dns_cache=300,
-            use_dns_cache=True,
-            force_close=True,  # Force close to avoid hanging connections
-            enable_cleanup_closed=True
-        )
-        
-        # Ultra-aggressive timeouts
-        timeout = aiohttp.ClientTimeout(total=1.0, connect=0.5, sock_connect=0.5, sock_read=0.5)
-        
-        SESSION_POOL = aiohttp.ClientSession(
-            connector=connector, 
-            timeout=timeout,
-            trust_env=True
-        )
-    
-    return SESSION_POOL
-
-async def close_session_pool():
-    global SESSION_POOL
-    if SESSION_POOL is not None:
-        await SESSION_POOL.close()
-        SESSION_POOL = None
-
-async def fetch_url(session, url, e_string, m_string, e_code, m_code):
-    """Fetch a single URL with aggressive timeouts."""
+async def fetch(session, url, e_string, m_string, e_code, m_code):
     headers = {
         'User-Agent': get_random_user_agent(),
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'close'
+        'Connection': 'keep-alive'
     }
-    
+
     try:
-        async with session.get(url, headers=headers, ssl=False, allow_redirects=True, timeout=1.0) as response:
-            text = await response.text() if (e_string and response.status == e_code) or (m_string and response.status == m_code) else ""
-            
-            if response.status == e_code and (not e_string or e_string in text):
-                return {'status': response.status, 'exists': True, 'final_url': str(response.url)}
-            elif m_code is not None and response.status == m_code and (not m_string or m_string in text):
-                return {'status': response.status, 'exists': False, 'final_url': str(response.url)}
-            else:
-                return {'status': response.status, 'exists': False, 'final_url': str(response.url)}
-    
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        return {'exists': False, 'status': 0, 'error': str(e), 'final_url': url}
+        async with session.get(url, headers=headers, timeout=2, ssl=False) as response:
+            text = await response.text()
+
+            if response.status == e_code and e_string in text:
+                return {
+                    'status': response.status,
+                    'exists': True,
+                    'final_url': str(response.url),
+                    'text': text if app.debug else None
+                }
+
+            if m_code is not None and m_string is not None:
+                if response.status == m_code and m_string in text:
+                    return {
+                        'status': response.status,
+                        'exists': False,
+                        'final_url': str(response.url),
+                        'text': text if app.debug else None
+                    }
+
+            return {
+                'status': response.status,
+                'exists': False,
+                'final_url': str(response.url),
+                'text': text if app.debug else None
+            }
+
     except Exception as e:
-        return {'exists': False, 'status': 0, 'error': str(e), 'final_url': url}
+        return {
+            'exists': False,
+            'status': 0,
+            'error': str(e),
+            'final_url': url
+        }
 
-async def process_urls(urls, e_string, m_string, e_code, m_code):
-    """Process all URLs asynchronously with maximum parallelism."""
-    session = await setup_session_pool()
-    tasks = [fetch_url(session, url, e_string, m_string, e_code, m_code) for url in urls]
-    results = await asyncio.gather(*tasks)
-    return dict(zip(urls, results))
+async def process_requests(urls, e_string, m_string, e_code, m_code):
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
+        return await asyncio.gather(*tasks)
 
-def process_in_subprocess(urls, e_string, m_string, e_code, m_code):
-    """Run the async code in a separate process."""
-    asyncio.set_event_loop(asyncio.new_event_loop())
-    loop = asyncio.get_event_loop()
-    try:
-        return loop.run_until_complete(process_urls(urls, e_string, m_string, e_code, m_code))
-    finally:
-        loop.run_until_complete(close_session_pool())
-        loop.close()
-
-@app.route('/metadata', methods=['GET', 'OPTIONS'])
-def get_metadata():
-    """Fetch metadata from the sites.json file."""
+@app.route('/check', methods=['POST', 'OPTIONS'])
+def check_username():
     if request.method == 'OPTIONS':
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
         return response
 
-    # In-memory cache
-    if not hasattr(app, 'metadata_cache') or app.metadata_cache is None:
-        try:
-            file_path = 'sites.json'
-            if not os.path.exists(file_path):
-                return jsonify({'error': 'File not found'}), 404
+    try:
+        data = request.get_json()
+        if not data or 'url' not in data:
+            return jsonify({'error': 'Missing URL parameter'}), 400
 
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            if 'sites' not in data:
-                return jsonify({'error': 'Invalid JSON structure'}), 500
-                
-            app.metadata_cache = data['sites']
-        except Exception as e:
-            logger.error(f"Error loading metadata: {str(e)}")
-            return jsonify({'error': str(e)}), 500
-    
-    response = jsonify({'sites': app.metadata_cache})
-    response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
-    return response
+        url = data['url']
+        e_string = data.get('e_string')
+        m_string = data.get('m_string')
+        e_code = data.get('e_code')
+        m_code = data.get('m_code')
+
+        # Submit the task to the thread pool and get future
+        future = asyncio.run(process_requests([url], e_string, m_string, e_code, m_code))
+        result = future[0]  # Get the first (and only) result
+
+        response = jsonify(result)
+        return response
+
+    except Exception as e:
+        logger.error(f"Error processing request: {str(e)}")
+        return jsonify({'error': str(e), 'exists': False}), 500
 
 @app.route('/batch_check', methods=['POST', 'OPTIONS'])
 def batch_check_usernames():
     if request.method == 'OPTIONS':
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
         return response
@@ -262,41 +218,64 @@ def batch_check_usernames():
             return jsonify({'error': 'Missing or invalid URLs parameter'}), 400
 
         urls = data['urls']
-        e_string = data.get('e_string')
-        m_string = data.get('m_string')
-        e_code = data.get('e_code')
-        m_code = data.get('m_code')
+        default_e_string = data.get('e_string')
+        default_m_string = data.get('m_string')
+        default_e_code = data.get('e_code')
+        default_m_code = data.get('m_code')
 
-        start_time = datetime.now()
-        
-        # Split URLs into chunks for parallel processing
-        chunk_size = max(10, len(urls) // NUM_WORKERS)
-        futures = []
-        
-        with ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
-            for i in range(0, len(urls), chunk_size):
-                chunk = urls[i:i + chunk_size]
-                future = executor.submit(process_in_subprocess, chunk, e_string, m_string, e_code, m_code)
-                futures.append(future)
-            
-            results = {}
-            for future in futures:
-                results.update(future.result())
-        
-        end_time = datetime.now()
-        total_time = (end_time - start_time).total_seconds()
-        logger.info(f"Processed {len(urls)} URLs in {total_time:.2f} seconds ({len(urls) / total_time:.2f} URLs/sec)")
-
-        response = jsonify({'results': results})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
-        return response
+        results = asyncio.run(process_requests(urls, default_e_string, default_m_string, default_e_code, default_m_code))
+        return jsonify({'results': dict(zip(urls, results))})
 
     except Exception as e:
         logger.error(f"Error processing batch request: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/metadata', methods=['GET', 'OPTIONS'])
+def get_metadata():
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        return response
+
+    try:
+        # Ensure the file path is correct
+        file_path = 'sites.json'
+        
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            logger.error(f"File not found: {file_path}")
+            return jsonify({'error': 'File not found'}), 404
+
+        # Open and read the file
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Check if the 'sites' key exists
+        if 'sites' not in data:
+            logger.error(f"Invalid JSON structure: 'sites' key missing")
+            return jsonify({'error': 'Invalid JSON structure'}), 500
+
+        return jsonify({'sites': data['sites']})
+
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {str(e)}")
+        return jsonify({'error': 'Invalid JSON format'}), 500
+
+    except Exception as e:
+        logger.error(f"Error reading metadata: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/status', methods=['GET'])
+def get_status():
+    """Endpoint to get the status of the server"""
+    return jsonify({
+        'server_status': 'running'
+    })
+
+@app.route('/')
+def home():
+    return 'Keser API is running!'
+
 if __name__ == '__main__':
-    # Run the app with production server
-    from waitress import serve
-    print("Starting server with Waitress on port 10000...")
-    serve(app, host='0.0.0.0', port=10000, threads=32)  # Increased threads
+    app.run(host='0.0.0.0', port=10000)
