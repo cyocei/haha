@@ -7,24 +7,30 @@ import aiohttp
 import asyncio
 from datetime import datetime
 from aiohttp.resolver import AsyncResolver
+import random
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
+app.debug = False  # Ensure debug is off in production for better performance
 
 # Enable CORS for all routes and allow specific origins
 CORS(app, resources={
     r"/*": {
-        "origins": ["https://vbiskit.com"],  # Allow your frontend origin
-        "methods": ["GET", "POST", "OPTIONS"],  # Allowed HTTP methods
-        "allow_headers": ["Content-Type"]  # Allowed headers
+        "origins": ["https://vbiskit.com"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
     }
 })
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# User agents (add more as needed)
+# Thread pool for running asyncio tasks
+thread_pool = ThreadPoolExecutor(max_workers=4)
+
+# User agents list (keep the same as your original code)
 USER_AGENTS = [
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
+   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
     "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36",
     "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko",
     "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:40.0) Gecko/20100101 Firefox/40.0",
@@ -133,8 +139,17 @@ USER_AGENTS = [
 ]
 
 def get_random_user_agent():
-    import random
     return random.choice(USER_AGENTS)
+
+# Create a semaphore to limit concurrent connections per domain
+# This helps prevent rate limiting and improve reliability
+SEMAPHORES = {}
+MAX_CONNECTIONS_PER_DOMAIN = 5
+
+def get_domain_semaphore(domain):
+    if domain not in SEMAPHORES:
+        SEMAPHORES[domain] = asyncio.Semaphore(MAX_CONNECTIONS_PER_DOMAIN)
+    return SEMAPHORES[domain]
 
 async def fetch(session, url, e_string, m_string, e_code, m_code):
     headers = {
@@ -144,37 +159,58 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
         'Connection': 'keep-alive'
     }
 
+    # Extract domain for semaphore
+    from urllib.parse import urlparse
+    domain = urlparse(url).netloc
+    semaphore = get_domain_semaphore(domain)
+
     try:
-        start_time = datetime.now()
-        async with session.get(url, headers=headers, timeout=19.6, ssl=False) as response:
-            text = await response.text()
+        # Use semaphore to limit connections per domain
+        async with semaphore:
+            start_time = datetime.now()
+            
+            # Reduce timeout for faster checks
+            async with session.get(url, headers=headers, timeout=5.0, ssl=False) as response:
+                # Only read text if needed for pattern matching
+                if e_string or m_string:
+                    text = await response.text()
+                else:
+                    text = ""
 
-            if response.status == e_code and e_string in text:
-                result = {
-                    'status': response.status,
-                    'exists': True,
-                    'final_url': str(response.url),
-                    'text': text if app.debug else None
-                }
-            elif m_code is not None and m_string is not None and response.status == m_code and m_string in text:
-                result = {
-                    'status': response.status,
-                    'exists': False,
-                    'final_url': str(response.url),
-                    'text': text if app.debug else None
-                }
-            else:
-                result = {
-                    'status': response.status,
-                    'exists': False,
-                    'final_url': str(response.url),
-                    'text': text if app.debug else None
-                }
+                if response.status == e_code and (not e_string or e_string in text):
+                    result = {
+                        'status': response.status,
+                        'exists': True,
+                        'final_url': str(response.url),
+                        'text': text if app.debug else None
+                    }
+                elif m_code is not None and m_string is not None and response.status == m_code and m_string in text:
+                    result = {
+                        'status': response.status,
+                        'exists': False,
+                        'final_url': str(response.url),
+                        'text': text if app.debug else None
+                    }
+                else:
+                    result = {
+                        'status': response.status,
+                        'exists': False,
+                        'final_url': str(response.url),
+                        'text': text if app.debug else None
+                    }
 
-            end_time = datetime.now()
-            logger.info(f"Processed {url} in {(end_time - start_time).total_seconds():.2f} seconds")
-            return result
+                end_time = datetime.now()
+                logger.info(f"Processed {url} in {(end_time - start_time).total_seconds():.2f} seconds")
+                return result
 
+    except asyncio.TimeoutError:
+        logger.warning(f"Timeout fetching {url}")
+        return {
+            'exists': False,
+            'status': 0,
+            'error': 'Timeout',
+            'final_url': url
+        }
     except Exception as e:
         logger.error(f"Error fetching {url}: {str(e)}")
         return {
@@ -185,19 +221,39 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
         }
 
 async def process_requests(urls, e_string, m_string, e_code, m_code):
-    # Use Google DNS (8.8.8.8 and 8.8.4.4)
+    # Use Cloudflare DNS for potentially faster lookups
     resolver = AsyncResolver(nameservers=["1.1.1.1", "1.0.0.1"])
-    connector = aiohttp.TCPConnector(limit=100, resolver=resolver)  # Increase connection limit
-    async with aiohttp.ClientSession(connector=connector) as session:
+    
+    # Configure connector with optimized settings
+    connector = aiohttp.TCPConnector(
+        limit=200,  # Increase connection limit
+        resolver=resolver,
+        ttl_dns_cache=300,  # Cache DNS results longer
+        use_dns_cache=True,
+        force_close=False,  # Keep connections alive when possible
+    )
+    
+    # Configure client session with optimized timeouts
+    timeout = aiohttp.ClientTimeout(total=10.0, connect=2.0)
+    
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
-        return await asyncio.gather(*tasks)
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+def run_async_check(urls, e_string, m_string, e_code, m_code):
+    """Run the async function in the current thread"""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(process_requests(urls, e_string, m_string, e_code, m_code))
+    finally:
+        loop.close()
 
 @app.route('/check', methods=['POST', 'OPTIONS'])
 def check_username():
     if request.method == 'OPTIONS':
         # Preflight request handling
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
         return response
@@ -213,12 +269,15 @@ def check_username():
         e_code = data.get('e_code')
         m_code = data.get('m_code')
 
-        # Submit the task to the thread pool and get future
-        future = asyncio.run(process_requests([url], e_string, m_string, e_code, m_code))
-        result = future[0]  # Get the first (and only) result
+        # Use thread pool to avoid blocking Flask
+        results = thread_pool.submit(
+            run_async_check, [url], e_string, m_string, e_code, m_code
+        ).result()
+        
+        result = results[0]  # Get the first (and only) result
 
         response = jsonify(result)
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         return response
 
     except Exception as e:
@@ -230,7 +289,7 @@ def batch_check_usernames():
     if request.method == 'OPTIONS':
         # Preflight request handling
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
         return response
@@ -246,15 +305,33 @@ def batch_check_usernames():
         default_e_code = data.get('e_code')
         default_m_code = data.get('m_code')
 
+        # Calculate start time for metrics
         start_time = datetime.now()
-        results = asyncio.run(process_requests(urls, default_e_string, default_m_string, default_e_code, default_m_code))
+        
+        # Process in batches of 100 URLs maximum
+        BATCH_SIZE = 100
+        all_results = {}
+        
+        for i in range(0, len(urls), BATCH_SIZE):
+            batch_urls = urls[i:i+BATCH_SIZE]
+            batch_results = thread_pool.submit(
+                run_async_check, 
+                batch_urls, default_e_string, default_m_string, default_e_code, default_m_code
+            ).result()
+            
+            # Add results to combined dictionary
+            all_results.update(dict(zip(batch_urls, batch_results)))
+            
+            # Log batch completion
+            completed = min(i + BATCH_SIZE, len(urls))
+            logger.info(f"Completed {completed}/{len(urls)} URLs")
+        
         end_time = datetime.now()
-
         total_time = (end_time - start_time).total_seconds()
         logger.info(f"Processed {len(urls)} URLs in {total_time:.2f} seconds ({len(urls) / total_time:.2f} URLs/sec)")
 
-        response = jsonify({'results': dict(zip(urls, results))})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
+        response = jsonify({'results': all_results})
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         return response
 
     except Exception as e:
@@ -266,31 +343,34 @@ def get_metadata():
     if request.method == 'OPTIONS':
         # Preflight request handling
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         return response
 
     try:
-        # Ensure the file path is correct
-        file_path = 'sites.json'
-        
-        # Check if the file exists
-        if not os.path.exists(file_path):
-            logger.error(f"File not found: {file_path}")
-            return jsonify({'error': 'File not found'}), 404
+        # Cache mechanism for metadata
+        if not hasattr(app, 'metadata_cache'):
+            # Ensure the file path is correct
+            file_path = 'sites.json'
+            
+            if not os.path.exists(file_path):
+                logger.error(f"File not found: {file_path}")
+                return jsonify({'error': 'File not found'}), 404
 
-        # Open and read the file
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # Check if the 'sites' key exists
-        if 'sites' not in data:
-            logger.error(f"Invalid JSON structure: 'sites' key missing")
-            return jsonify({'error': 'Invalid JSON structure'}), 500
-
-        response = jsonify({'sites': data['sites']})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
+            # Open and read the file once
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            if 'sites' not in data:
+                logger.error(f"Invalid JSON structure: 'sites' key missing")
+                return jsonify({'error': 'Invalid JSON structure'}), 500
+                
+            # Cache the data
+            app.metadata_cache = data['sites']
+            
+        response = jsonify({'sites': app.metadata_cache})
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         return response
 
     except json.JSONDecodeError as e:
@@ -307,7 +387,7 @@ def get_status():
     response = jsonify({
         'server_status': 'running'
     })
-    response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
+    response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
     return response
 
 @app.route('/')
@@ -315,4 +395,5 @@ def home():
     return 'Keser API is running!'
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+    # Use a production-ready WSGI server like gunicorn in production
+    app.run(host='0.0.0.0', port=10000, threaded=True)
