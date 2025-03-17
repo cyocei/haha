@@ -1,24 +1,15 @@
+import aiohttp
+import asyncio
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
-import json
 import logging
-import threading
-import queue
-import time
-from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configure thread pool with 10 workers
-thread_pool = ThreadPoolExecutor(max_workers=85)
-
-# Thread-safe request queue
-request_queue = queue.Queue()
-
+# Single user agent (add the rest as needed)
 USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
     "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36",
@@ -132,8 +123,7 @@ def get_random_user_agent():
     import random
     return random.choice(USER_AGENTS)
 
-def process_request(url, e_string, m_string, e_code, m_code):
-    """Function to process a single URL check request in a thread"""
+async def fetch(session, url, e_string, m_string, e_code, m_code):
     headers = {
         'User-Agent': get_random_user_agent(),
         'Accept': '*/*',
@@ -142,54 +132,34 @@ def process_request(url, e_string, m_string, e_code, m_code):
     }
 
     try:
-        # Add a small delay to prevent overwhelming target servers
-        time.sleep(0.13)
-        
-        response = requests.get(
-            url, 
-            headers=headers, 
-            timeout=5,
-            allow_redirects=True,
-            verify=False
-        )
-        
-        try:
-            text = response.content.decode('utf-8')
-        except UnicodeDecodeError:
-            text = response.content.decode('latin-1')
+        async with session.get(url, headers=headers, timeout=5, ssl=False) as response:
+            text = await response.text()
 
-        # Match CLI logic exactly:
-        # Only mark as existing if both e_code and e_string match
-        if response.status_code == e_code and e_string in text:
-            exists = True
-            return {
-                'status': response.status_code,
-                'exists': exists,
-                'final_url': response.url,
-                'text': text if app.debug else None
-            }
-
-        # Check for explicit non-existence if m_code and m_string are provided
-        if m_code is not None and m_string is not None:
-            if response.status_code == m_code and m_string in text:
-                exists = False
+            if response.status == e_code and e_string in text:
                 return {
-                    'status': response.status_code,
-                    'exists': exists,
-                    'final_url': response.url,
+                    'status': response.status,
+                    'exists': True,
+                    'final_url': str(response.url),
                     'text': text if app.debug else None
                 }
 
-        # If neither condition matched, assume it doesn't exist
-        return {
-            'status': response.status_code,
-            'exists': False,
-            'final_url': response.url,
-            'text': text if app.debug else None
-        }
+            if m_code is not None and m_string is not None:
+                if response.status == m_code and m_string in text:
+                    return {
+                        'status': response.status,
+                        'exists': False,
+                        'final_url': str(response.url),
+                        'text': text if app.debug else None
+                    }
 
-    except requests.exceptions.RequestException as e:
-        # On error, don't assume existence
+            return {
+                'status': response.status,
+                'exists': False,
+                'final_url': str(response.url),
+                'text': text if app.debug else None
+            }
+
+    except Exception as e:
         return {
             'exists': False,
             'status': 0,
@@ -197,41 +167,13 @@ def process_request(url, e_string, m_string, e_code, m_code):
             'final_url': url
         }
 
-@app.route('/check', methods=['POST', 'OPTIONS'])
-def check_username():
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        return response
-
-    try:
-        data = request.get_json()
-        if not data or 'url' not in data:
-            return jsonify({'error': 'Missing URL parameter'}), 400
-
-        url = data['url']
-        e_string = data.get('e_string')
-        m_string = data.get('m_string')
-        e_code = data.get('e_code')  # Get the expected existence status code
-        m_code = data.get('m_code')  # Get the expected missing status code
-
-        # Submit the task to the thread pool and get future
-        future = thread_pool.submit(process_request, url, e_string, m_string, e_code, m_code)
-        
-        # Wait for the result
-        result = future.result()
-        
-        response = jsonify(result)
-        return response
-
-    except Exception as e:
-        logger.error(f"Error processing request: {str(e)}")
-        return jsonify({'error': str(e), 'exists': False}), 500
+async def process_requests(urls, e_string, m_string, e_code, m_code):
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
+        return await asyncio.gather(*tasks)
 
 @app.route('/batch_check', methods=['POST', 'OPTIONS'])
 def batch_check_usernames():
-    """New endpoint to check multiple URLs in parallel"""
     if request.method == 'OPTIONS':
         response = jsonify({'status': 'ok'})
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
@@ -248,81 +190,13 @@ def batch_check_usernames():
         default_m_string = data.get('m_string')
         default_e_code = data.get('e_code')
         default_m_code = data.get('m_code')
-        
-        # List to store futures
-        futures = []
-        
-        # Submit all tasks to thread pool
-        for url_data in urls:
-            # Handle either string URLs or dictionary with per-URL parameters
-            if isinstance(url_data, str):
-                url = url_data
-                e_string = default_e_string
-                m_string = default_m_string
-                e_code = default_e_code
-                m_code = default_m_code
-            else:
-                url = url_data.get('url')
-                e_string = url_data.get('e_string', default_e_string)
-                m_string = url_data.get('m_string', default_m_string)
-                e_code = url_data.get('e_code', default_e_code)
-                m_code = url_data.get('m_code', default_m_code)
-            
-            if not url:
-                continue
-                
-            future = thread_pool.submit(process_request, url, e_string, m_string, e_code, m_code)
-            futures.append((url, future))
-        
-        # Collect results
-        results = {}
-        for url, future in futures:
-            try:
-                results[url] = future.result()
-            except Exception as e:
-                results[url] = {
-                    'exists': False,
-                    'status': 0,
-                    'error': str(e),
-                    'final_url': url
-                }
-        
-        return jsonify({'results': results})
+
+        results = asyncio.run(process_requests(urls, default_e_string, default_m_string, default_e_code, default_m_code))
+        return jsonify({'results': dict(zip(urls, results))})
 
     except Exception as e:
         logger.error(f"Error processing batch request: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/metadata', methods=['GET', 'OPTIONS'])
-def get_metadata():
-    if request.method == 'OPTIONS':
-        response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        return response
-
-    try:
-        with open('sites.json', 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            return jsonify({'sites': data.get('sites', [])})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/status', methods=['GET'])
-def get_status():
-    """Endpoint to get the status of the thread pool"""
-    return jsonify({
-        'thread_pool_size': thread_pool._max_workers,
-        'active_threads': len([t for t in threading.enumerate() if t.is_alive()]),
-        'server_status': 'running'
-    })
-
-@app.route('/')
-def home():
-    return 'Keser API is running with 10 threads!'
-
 if __name__ == '__main__':
-    # Use threaded=True to enable multiple request handling
-    app.run(host='0.0.0.0', port=10000, threaded=True)
-else:
-    application = app
+    app.run(host='0.0.0.0', port=10000)
