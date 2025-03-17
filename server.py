@@ -13,8 +13,8 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configure thread pool with 15 workers instead of 40
-thread_pool = ThreadPoolExecutor(max_workers=15)
+# Configure thread pool with 10 workers
+thread_pool = ThreadPoolExecutor(max_workers=10)
 
 # Thread-safe request queue
 request_queue = queue.Queue()
@@ -143,7 +143,7 @@ def process_request(url, e_string, m_string, e_code, m_code):
 
     try:
         # Add a small delay to prevent overwhelming target servers
-        time.sleep(0.1)
+        time.sleep(0.15)
         
         response = requests.get(
             url, 
@@ -319,7 +319,7 @@ def get_status():
 
 @app.route('/')
 def home():
-    return 'Keser API is running with 15 threads!'
+    return 'Keser API is running with 10 threads!'
 
 if __name__ == '__main__':
     # Use threaded=True to enable multiple request handling
