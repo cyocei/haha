@@ -13,8 +13,8 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configure thread pool with 40 workers
-thread_pool = ThreadPoolExecutor(max_workers=40)
+# Configure thread pool with 15 workers instead of 40
+thread_pool = ThreadPoolExecutor(max_workers=15)
 
 # Thread-safe request queue
 request_queue = queue.Queue()
@@ -142,6 +142,9 @@ def process_request(url, e_string, m_string, e_code, m_code):
     }
 
     try:
+        # Add a small delay to prevent overwhelming target servers
+        time.sleep(0.1)
+        
         response = requests.get(
             url, 
             headers=headers, 
@@ -197,7 +200,10 @@ def process_request(url, e_string, m_string, e_code, m_code):
 @app.route('/check', methods=['POST', 'OPTIONS'])
 def check_username():
     if request.method == 'OPTIONS':
-        return jsonify({'status': 'ok'})
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        return response
 
     try:
         data = request.get_json()
@@ -216,7 +222,8 @@ def check_username():
         # Wait for the result
         result = future.result()
         
-        return jsonify(result)
+        response = jsonify(result)
+        return response
 
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}")
@@ -226,7 +233,10 @@ def check_username():
 def batch_check_usernames():
     """New endpoint to check multiple URLs in parallel"""
     if request.method == 'OPTIONS':
-        return jsonify({'status': 'ok'})
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        return response
 
     try:
         data = request.get_json()
@@ -286,7 +296,10 @@ def batch_check_usernames():
 @app.route('/metadata', methods=['GET', 'OPTIONS'])
 def get_metadata():
     if request.method == 'OPTIONS':
-        return jsonify({'status': 'ok'})
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        return response
 
     try:
         with open('sites.json', 'r', encoding='utf-8') as f:
@@ -306,7 +319,7 @@ def get_status():
 
 @app.route('/')
 def home():
-    return 'Keser API is running with 40 threads!'
+    return 'Keser API is running with 15 threads!'
 
 if __name__ == '__main__':
     # Use threaded=True to enable multiple request handling
