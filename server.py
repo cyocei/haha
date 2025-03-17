@@ -192,39 +192,6 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
         tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
         return await asyncio.gather(*tasks)
 
-@app.route('/check', methods=['POST', 'OPTIONS'])
-def check_username():
-    if request.method == 'OPTIONS':
-        # Preflight request handling
-        response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        return response
-
-    try:
-        data = request.get_json()
-        if not data or 'url' not in data:
-            return jsonify({'error': 'Missing URL parameter'}), 400
-
-        url = data['url']
-        e_string = data.get('e_string')
-        m_string = data.get('m_string')
-        e_code = data.get('e_code')
-        m_code = data.get('m_code')
-
-        # Submit the task to the thread pool and get future
-        future = asyncio.run(process_requests([url], e_string, m_string, e_code, m_code))
-        result = future[0]  # Get the first (and only) result
-
-        response = jsonify(result)
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
-        return response
-
-    except Exception as e:
-        logger.error(f"Error processing request: {str(e)}")
-        return jsonify({'error': str(e), 'exists': False}), 500
-
 @app.route('/batch_check', methods=['POST', 'OPTIONS'])
 def batch_check_usernames():
     if request.method == 'OPTIONS':
@@ -260,59 +227,6 @@ def batch_check_usernames():
     except Exception as e:
         logger.error(f"Error processing batch request: {str(e)}")
         return jsonify({'error': str(e)}), 500
-
-@app.route('/metadata', methods=['GET', 'OPTIONS'])
-def get_metadata():
-    if request.method == 'OPTIONS':
-        # Preflight request handling
-        response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        return response
-
-    try:
-        # Ensure the file path is correct
-        file_path = 'sites.json'
-        
-        # Check if the file exists
-        if not os.path.exists(file_path):
-            logger.error(f"File not found: {file_path}")
-            return jsonify({'error': 'File not found'}), 404
-
-        # Open and read the file
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        # Check if the 'sites' key exists
-        if 'sites' not in data:
-            logger.error(f"Invalid JSON structure: 'sites' key missing")
-            return jsonify({'error': 'Invalid JSON structure'}), 500
-
-        response = jsonify({'sites': data['sites']})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
-        return response
-
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON decode error: {str(e)}")
-        return jsonify({'error': 'Invalid JSON format'}), 500
-
-    except Exception as e:
-        logger.error(f"Error reading metadata: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/status', methods=['GET'])
-def get_status():
-    """Endpoint to get the status of the server"""
-    response = jsonify({
-        'server_status': 'running'
-    })
-    response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
-    return response
-
-@app.route('/')
-def home():
-    return 'Keser API is running!'
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
