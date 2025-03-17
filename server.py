@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configure thread pool with 10 workers
-thread_pool = ThreadPoolExecutor(max_workers=45)
+thread_pool = ThreadPoolExecutor(max_workers=85)
 
 # Thread-safe request queue
 request_queue = queue.Queue()
@@ -143,12 +143,12 @@ def process_request(url, e_string, m_string, e_code, m_code):
 
     try:
         # Add a small delay to prevent overwhelming target servers
-        time.sleep(0.15)
+        time.sleep(0.13)
         
         response = requests.get(
             url, 
             headers=headers, 
-            timeout=10,
+            timeout=5,
             allow_redirects=True,
             verify=False
         )
