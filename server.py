@@ -1,14 +1,21 @@
+from aiohttp import ClientSession, ClientTimeout, TCPConnector
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
+import asyncio
 import json
+import random
 import logging
+import uvicorn
+from concurrent.futures import ThreadPoolExecutor
+import aiohttp
+import time
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# List of user agents
 USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
     "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36",
@@ -118,9 +125,78 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/600.8.9 (KHTML, like Gecko)"
 ]
 
-def get_random_user_agent():
-    import random
-    return random.choice(USER_AGENTS)
+# Create a connection pool
+connector = TCPConnector(limit=50, ttl_dns_cache=60, ssl=False)
+timeout = ClientTimeout(total=10)  # Increased timeout for slower websites
+
+# Shared event loop
+loop = asyncio.get_event_loop()
+
+async def check_single_site(session, url, e_string, m_string, e_code, m_code):
+    try:
+        headers = {
+            'User-Agent': random.choice(USER_AGENTS),
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Connection': 'keep-alive'
+        }
+
+        async with session.get(url, headers=headers, timeout=timeout, allow_redirects=True) as response:
+            try:
+                text = await response.text()
+                status = response.status
+
+                # Fast path: check existence first
+                if status == e_code and e_string in text:
+                    return {
+                        'status': status,
+                        'exists': True,
+                        'final_url': str(response.url),
+                        'text': text if app.debug else None
+                    }
+
+                # Check for explicit non-existence
+                if m_code is not None and m_string is not None:
+                    if status == m_code and m_string in text:
+                        return {
+                            'status': status,
+                            'exists': False,
+                            'final_url': str(response.url),
+                            'text': text if app.debug else None
+                        }
+
+                # Default case
+                return {
+                    'status': status,
+                    'exists': False,
+                    'final_url': str(response.url),
+                    'text': text if app.debug else None
+                }
+
+            except UnicodeDecodeError:
+                # Fallback to latin-1 if UTF-8 fails
+                text = await response.read()
+                text = text.decode('latin-1')
+                return {
+                    'status': response.status,
+                    'exists': False,
+                    'final_url': str(response.url),
+                    'text': text if app.debug else None
+                }
+
+    except Exception as e:
+        return {
+            'exists': False,
+            'status': 0,
+            'error': str(e),
+            'final_url': url
+        }
+
+async def check_multiple_sites(urls, e_string, m_string, e_code, m_code):
+    async with ClientSession(connector=connector, timeout=timeout) as session:
+        tasks = [check_single_site(session, url, e_string, m_string, e_code, m_code) for url in urls]
+        results = await asyncio.gather(*tasks)
+        return results
 
 @app.route('/check', methods=['POST', 'OPTIONS'])
 def check_username():
@@ -129,87 +205,46 @@ def check_username():
 
     try:
         data = request.get_json()
-        if not data or 'url' not in data:
-            return jsonify({'error': 'Missing URL parameter'}), 400
+        if not data or 'urls' not in data:
+            return jsonify({'error': 'Missing URLs parameter'}), 400
 
-        url = data['url']
+        urls = data['urls']
         e_string = data.get('e_string')
         m_string = data.get('m_string')
-        e_code = data.get('e_code')  # Get the expected existence status code
-        m_code = data.get('m_code')  # Get the expected missing status code
+        e_code = data.get('e_code')
+        m_code = data.get('m_code')
 
-        headers = {
-            'User-Agent': get_random_user_agent(),
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Connection': 'keep-alive'
-        }
-
-        try:
-            response = requests.get(
-                url, 
-                headers=headers, 
-                timeout=13.6,
-                allow_redirects=True,
-                verify=False
-            )
-            
-            try:
-                text = response.content.decode('utf-8')
-            except UnicodeDecodeError:
-                text = response.content.decode('latin-1')
-
-            # Match CLI logic exactly:
-            # Only mark as existing if both e_code and e_string match
-            if response.status_code == e_code and e_string in text:
-                exists = True
-                return jsonify({
-                    'status': response.status_code,
-                    'exists': exists,
-                    'final_url': response.url,
-                    'text': text if app.debug else None
-                })
-
-            # Check for explicit non-existence if m_code and m_string are provided
-            if m_code is not None and m_string is not None:
-                if response.status_code == m_code and m_string in text:
-                    exists = False
-                    return jsonify({
-                        'status': response.status_code,
-                        'exists': exists,
-                        'final_url': response.url,
-                        'text': text if app.debug else None
-                    })
-
-            # If neither condition matched, assume it doesn't exist
-            return jsonify({
-                'status': response.status_code,
-                'exists': False,
-                'final_url': response.url,
-                'text': text if app.debug else None
-            })
-
-        except requests.exceptions.RequestException as e:
-            # On error, don't assume existence
-            return jsonify({
-                'exists': False,
-                'status': 0,
-                'error': str(e),
-                'final_url': url
-            })
+        # Run the async check in the shared event loop
+        results = loop.run_until_complete(check_multiple_sites(urls, e_string, m_string, e_code, m_code))
+        return jsonify(results)
 
     except Exception as e:
         return jsonify({'error': str(e), 'exists': False}), 500
+
+# Cache for metadata
+metadata_cache = None
+metadata_cache_time = 0
+CACHE_DURATION = 300  # 5 minutes
 
 @app.route('/metadata', methods=['GET', 'OPTIONS'])
 def get_metadata():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'})
 
+    global metadata_cache, metadata_cache_time
+    current_time = time.time()
+
     try:
+        # Return cached data if available and fresh
+        if metadata_cache and (current_time - metadata_cache_time) < CACHE_DURATION:
+            return jsonify(metadata_cache)
+
+        # Read fresh data
         with open('sites.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
-            return jsonify({'sites': data.get('sites', [])})
+            metadata_cache = {'sites': data.get('sites', [])}
+            metadata_cache_time = current_time
+            return jsonify(metadata_cache)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -218,6 +253,7 @@ def home():
     return 'Keser API is running!'
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+    # Use uvicorn for better performance
+    uvicorn.run(app, host='0.0.0.0', port=10000, workers=4)
 else:
     application = app
