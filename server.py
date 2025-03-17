@@ -2,17 +2,23 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 import json
-import random
 import logging
+import threading
+import queue
 import time
-import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# List of user agents - keeping the 3 from before
+# Configure thread pool with 40 workers
+thread_pool = ThreadPoolExecutor(max_workers=40)
+
+# Thread-safe request queue
+request_queue = queue.Queue()
+
 USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
     "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36",
@@ -122,74 +128,71 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/600.8.9 (KHTML, like Gecko)"
 ]
 
-# Thread pool with 40 workers as requested
-thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=40)
+def get_random_user_agent():
+    import random
+    return random.choice(USER_AGENTS)
 
-def check_single_site(url, e_string, m_string, e_code, m_code):
+def process_request(url, e_string, m_string, e_code, m_code):
+    """Function to process a single URL check request in a thread"""
+    headers = {
+        'User-Agent': get_random_user_agent(),
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'keep-alive'
+    }
+
     try:
-        headers = {
-            'User-Agent': random.choice(USER_AGENTS),
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Connection': 'keep-alive'
-        }
-
-        response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
-        status = response.status_code
+        response = requests.get(
+            url, 
+            headers=headers, 
+            timeout=13.6,
+            allow_redirects=True,
+            verify=False
+        )
         
         try:
-            text = response.text
-            
-            # Fast path: check existence first
-            if status == e_code and e_string in text:
-                return {
-                    'status': status,
-                    'exists': True,
-                    'final_url': response.url,
-                    'text': text if app.debug else None
-                }
+            text = response.content.decode('utf-8')
+        except UnicodeDecodeError:
+            text = response.content.decode('latin-1')
 
-            # Check for explicit non-existence
-            if m_code is not None and m_string is not None:
-                if status == m_code and m_string in text:
-                    return {
-                        'status': status,
-                        'exists': False,
-                        'final_url': response.url,
-                        'text': text if app.debug else None
-                    }
-
-            # Default case
+        # Match CLI logic exactly:
+        # Only mark as existing if both e_code and e_string match
+        if response.status_code == e_code and e_string in text:
+            exists = True
             return {
-                'status': status,
-                'exists': False,
+                'status': response.status_code,
+                'exists': exists,
                 'final_url': response.url,
                 'text': text if app.debug else None
             }
 
-        except UnicodeDecodeError:
-            # Should be handled by requests automatically
-            return {
-                'status': status,
-                'exists': False,
-                'final_url': response.url,
-                'text': None
-            }
+        # Check for explicit non-existence if m_code and m_string are provided
+        if m_code is not None and m_string is not None:
+            if response.status_code == m_code and m_string in text:
+                exists = False
+                return {
+                    'status': response.status_code,
+                    'exists': exists,
+                    'final_url': response.url,
+                    'text': text if app.debug else None
+                }
 
-    except Exception as e:
-        logger.error(f"Error checking {url}: {str(e)}")
+        # If neither condition matched, assume it doesn't exist
+        return {
+            'status': response.status_code,
+            'exists': False,
+            'final_url': response.url,
+            'text': text if app.debug else None
+        }
+
+    except requests.exceptions.RequestException as e:
+        # On error, don't assume existence
         return {
             'exists': False,
             'status': 0,
             'error': str(e),
             'final_url': url
         }
-
-def check_multiple_sites(urls, e_string, m_string, e_code, m_code):
-    # Use the global thread pool for concurrent requests
-    futures = [thread_pool.submit(check_single_site, url, e_string, m_string, e_code, m_code) for url in urls]
-    results = [future.result() for future in concurrent.futures.as_completed(futures)]
-    return results
 
 @app.route('/check', methods=['POST', 'OPTIONS'])
 def check_username():
@@ -198,58 +201,115 @@ def check_username():
 
     try:
         data = request.get_json()
-        if not data or 'urls' not in data:
-            return jsonify({'error': 'Missing URLs parameter'}), 400
+        if not data or 'url' not in data:
+            return jsonify({'error': 'Missing URL parameter'}), 400
 
-        urls = data['urls']
+        url = data['url']
         e_string = data.get('e_string')
         m_string = data.get('m_string')
-        e_code = data.get('e_code')
-        m_code = data.get('m_code')
+        e_code = data.get('e_code')  # Get the expected existence status code
+        m_code = data.get('m_code')  # Get the expected missing status code
 
-        # Fully synchronous operation using thread pool
-        results = check_multiple_sites(urls, e_string, m_string, e_code, m_code)
-        return jsonify(results)
+        # Submit the task to the thread pool and get future
+        future = thread_pool.submit(process_request, url, e_string, m_string, e_code, m_code)
+        
+        # Wait for the result
+        result = future.result()
+        
+        return jsonify(result)
 
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}")
         return jsonify({'error': str(e), 'exists': False}), 500
 
-# Cache for metadata
-metadata_cache = None
-metadata_cache_time = 0
-CACHE_DURATION = 300  # 5 minutes
+@app.route('/batch_check', methods=['POST', 'OPTIONS'])
+def batch_check_usernames():
+    """New endpoint to check multiple URLs in parallel"""
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'})
+
+    try:
+        data = request.get_json()
+        if not data or 'urls' not in data or not isinstance(data['urls'], list):
+            return jsonify({'error': 'Missing or invalid URLs parameter'}), 400
+
+        urls = data['urls']
+        default_e_string = data.get('e_string')
+        default_m_string = data.get('m_string')
+        default_e_code = data.get('e_code')
+        default_m_code = data.get('m_code')
+        
+        # List to store futures
+        futures = []
+        
+        # Submit all tasks to thread pool
+        for url_data in urls:
+            # Handle either string URLs or dictionary with per-URL parameters
+            if isinstance(url_data, str):
+                url = url_data
+                e_string = default_e_string
+                m_string = default_m_string
+                e_code = default_e_code
+                m_code = default_m_code
+            else:
+                url = url_data.get('url')
+                e_string = url_data.get('e_string', default_e_string)
+                m_string = url_data.get('m_string', default_m_string)
+                e_code = url_data.get('e_code', default_e_code)
+                m_code = url_data.get('m_code', default_m_code)
+            
+            if not url:
+                continue
+                
+            future = thread_pool.submit(process_request, url, e_string, m_string, e_code, m_code)
+            futures.append((url, future))
+        
+        # Collect results
+        results = {}
+        for url, future in futures:
+            try:
+                results[url] = future.result()
+            except Exception as e:
+                results[url] = {
+                    'exists': False,
+                    'status': 0,
+                    'error': str(e),
+                    'final_url': url
+                }
+        
+        return jsonify({'results': results})
+
+    except Exception as e:
+        logger.error(f"Error processing batch request: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/metadata', methods=['GET', 'OPTIONS'])
 def get_metadata():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'})
 
-    global metadata_cache, metadata_cache_time
-    current_time = time.time()
-
     try:
-        # Return cached data if available and fresh
-        if metadata_cache and (current_time - metadata_cache_time) < CACHE_DURATION:
-            return jsonify(metadata_cache)
-
-        # Read fresh data
         with open('sites.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
-            metadata_cache = {'sites': data.get('sites', [])}
-            metadata_cache_time = current_time
-            return jsonify(metadata_cache)
+            return jsonify({'sites': data.get('sites', [])})
     except Exception as e:
-        logger.error(f"Error fetching metadata: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/status', methods=['GET'])
+def get_status():
+    """Endpoint to get the status of the thread pool"""
+    return jsonify({
+        'thread_pool_size': thread_pool._max_workers,
+        'active_threads': len([t for t in threading.enumerate() if t.is_alive()]),
+        'server_status': 'running'
+    })
 
 @app.route('/')
 def home():
-    return 'Keser API is running!'
+    return 'Keser API is running with 40 threads!'
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=10000)
+    # Use threaded=True to enable multiple request handling
+    app.run(host='0.0.0.0', port=10000, threaded=True)
 else:
-    # Important: We create a global thread pool that persists across requests
-    # This ensures we don't create new thread pools for each request
-    pass
+    application = app
