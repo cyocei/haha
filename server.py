@@ -11,7 +11,6 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Single user agent (add the rest as needed)
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
     "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36",
@@ -193,9 +192,8 @@ def check_username():
         e_code = data.get('e_code')
         m_code = data.get('m_code')
 
-        # Submit the task to the thread pool and get future
         future = asyncio.run(process_requests([url], e_string, m_string, e_code, m_code))
-        result = future[0]  # Get the first (and only) result
+        result = future[0]  
 
         response = jsonify(result)
         return response
@@ -239,19 +237,15 @@ def get_metadata():
         return response
 
     try:
-        # Ensure the file path is correct
         file_path = 'sites.json'
         
-        # Check if the file exists
         if not os.path.exists(file_path):
             logger.error(f"File not found: {file_path}")
             return jsonify({'error': 'File not found'}), 404
 
-        # Open and read the file
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        # Check if the 'sites' key exists
         if 'sites' not in data:
             logger.error(f"Invalid JSON structure: 'sites' key missing")
             return jsonify({'error': 'Invalid JSON structure'}), 500
@@ -275,7 +269,7 @@ def get_status():
 
 @app.route('/')
 def home():
-    return 'Keser API is running!'
+    return 'apis running'
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
