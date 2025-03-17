@@ -1,8 +1,10 @@
-import aiohttp
-import asyncio
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import json
 import logging
+import os
+import aiohttp
+import asyncio
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -11,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Single user agent (add the rest as needed)
 USER_AGENTS = [
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
+   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
     "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36",
     "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko",
     "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:40.0) Gecko/20100101 Firefox/40.0",
@@ -172,6 +174,36 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
         tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
         return await asyncio.gather(*tasks)
 
+@app.route('/check', methods=['POST', 'OPTIONS'])
+def check_username():
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        return response
+
+    try:
+        data = request.get_json()
+        if not data or 'url' not in data:
+            return jsonify({'error': 'Missing URL parameter'}), 400
+
+        url = data['url']
+        e_string = data.get('e_string')
+        m_string = data.get('m_string')
+        e_code = data.get('e_code')
+        m_code = data.get('m_code')
+
+        # Submit the task to the thread pool and get future
+        future = asyncio.run(process_requests([url], e_string, m_string, e_code, m_code))
+        result = future[0]  # Get the first (and only) result
+
+        response = jsonify(result)
+        return response
+
+    except Exception as e:
+        logger.error(f"Error processing request: {str(e)}")
+        return jsonify({'error': str(e), 'exists': False}), 500
+
 @app.route('/batch_check', methods=['POST', 'OPTIONS'])
 def batch_check_usernames():
     if request.method == 'OPTIONS':
@@ -197,6 +229,53 @@ def batch_check_usernames():
     except Exception as e:
         logger.error(f"Error processing batch request: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/metadata', methods=['GET', 'OPTIONS'])
+def get_metadata():
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        return response
+
+    try:
+        # Ensure the file path is correct
+        file_path = 'sites.json'
+        
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            logger.error(f"File not found: {file_path}")
+            return jsonify({'error': 'File not found'}), 404
+
+        # Open and read the file
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Check if the 'sites' key exists
+        if 'sites' not in data:
+            logger.error(f"Invalid JSON structure: 'sites' key missing")
+            return jsonify({'error': 'Invalid JSON structure'}), 500
+
+        return jsonify({'sites': data['sites']})
+
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {str(e)}")
+        return jsonify({'error': 'Invalid JSON format'}), 500
+
+    except Exception as e:
+        logger.error(f"Error reading metadata: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/status', methods=['GET'])
+def get_status():
+    """Endpoint to get the status of the server"""
+    return jsonify({
+        'server_status': 'running'
+    })
+
+@app.route('/')
+def home():
+    return 'Keser API is running!'
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
