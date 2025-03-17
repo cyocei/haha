@@ -10,7 +10,6 @@ import random
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 import signal
-import time
 
 app = Flask(__name__)
 app.debug = False
@@ -132,7 +131,6 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) AppleWebKit/600.8.9 (KHTML, like Gecko)"
-    # ... (rest of your user agents)
 ]
 
 def get_random_user_agent():
@@ -216,6 +214,38 @@ def process_in_subprocess(urls, e_string, m_string, e_code, m_code):
     finally:
         loop.run_until_complete(close_session_pool())
         loop.close()
+
+@app.route('/metadata', methods=['GET', 'OPTIONS'])
+def get_metadata():
+    """Fetch metadata from the sites.json file."""
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        return response
+
+    # In-memory cache
+    if not hasattr(app, 'metadata_cache') or app.metadata_cache is None:
+        try:
+            file_path = 'sites.json'
+            if not os.path.exists(file_path):
+                return jsonify({'error': 'File not found'}), 404
+
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            if 'sites' not in data:
+                return jsonify({'error': 'Invalid JSON structure'}), 500
+                
+            app.metadata_cache = data['sites']
+        except Exception as e:
+            logger.error(f"Error loading metadata: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    
+    response = jsonify({'sites': app.metadata_cache})
+    response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
+    return response
 
 @app.route('/batch_check', methods=['POST', 'OPTIONS'])
 def batch_check_usernames():
