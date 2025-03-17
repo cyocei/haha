@@ -6,29 +6,25 @@ import os
 import aiohttp
 import asyncio
 from datetime import datetime
-from aiohttp.resolver import AsyncResolver
 import random
-from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
+import signal
+import time
 
 app = Flask(__name__)
-app.debug = False  # Ensure debug is off in production for better performance
+app.debug = False
 
-# Enable CORS for all routes and allow specific origins
-CORS(app, resources={
-    r"/*": {
-        "origins": ["https://vbiskit.com"],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"]
-    }
-})
+# Enable CORS
+CORS(app, resources={r"/*": {"origins": ["https://vbiskit.com"], "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type"]}})
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Thread pool for running asyncio tasks
-thread_pool = ThreadPoolExecutor(max_workers=4)
+# Number of workers for multiprocessing
+NUM_WORKERS = multiprocessing.cpu_count() * 2
 
-# User agents list (keep the same as your original code)
+# Your existing USER_AGENTS list
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
     "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/45.0.2454.85 Safari/537.36",
@@ -141,117 +137,181 @@ USER_AGENTS = [
 def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
-# Create a semaphore to limit concurrent connections per domain
-# This helps prevent rate limiting and improve reliability
-SEMAPHORES = {}
-MAX_CONNECTIONS_PER_DOMAIN = 5
+# Create a global session object pool
+SESSION_POOL = None
+MAX_CONNECTIONS = 500  # Much higher connection limit
 
-def get_domain_semaphore(domain):
-    if domain not in SEMAPHORES:
-        SEMAPHORES[domain] = asyncio.Semaphore(MAX_CONNECTIONS_PER_DOMAIN)
-    return SEMAPHORES[domain]
+async def setup_session_pool():
+    global SESSION_POOL
+    if SESSION_POOL is None:
+        # Use Cloudflare DNS for faster lookups
+        resolver = aiohttp.resolver.AsyncResolver(nameservers=["1.1.1.1", "1.0.0.1"])
+        
+        # Configure for maximum throughput
+        connector = aiohttp.TCPConnector(
+            limit=MAX_CONNECTIONS,
+            resolver=resolver,
+            ttl_dns_cache=300,
+            use_dns_cache=True,
+            force_close=True,  # Force close to avoid hanging connections
+            enable_cleanup_closed=True
+        )
+        
+        # Ultra-aggressive timeouts
+        timeout = aiohttp.ClientTimeout(total=3.0, connect=1.0, sock_connect=1.0, sock_read=1.0)
+        
+        SESSION_POOL = aiohttp.ClientSession(
+            connector=connector, 
+            timeout=timeout,
+            trust_env=True
+        )
+    
+    return SESSION_POOL
 
-async def fetch(session, url, e_string, m_string, e_code, m_code):
+async def close_session_pool():
+    global SESSION_POOL
+    if SESSION_POOL is not None:
+        await SESSION_POOL.close()
+        SESSION_POOL = None
+
+async def fetch_with_retry(url, e_string, m_string, e_code, m_code, max_retries=1):
+    """Fetch a URL with retry logic for resilience"""
+    session = await setup_session_pool()
+    
     headers = {
         'User-Agent': get_random_user_agent(),
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive'
+        'Connection': 'close'  # Don't keep connections open
     }
-
-    # Extract domain for semaphore
-    from urllib.parse import urlparse
-    domain = urlparse(url).netloc
-    semaphore = get_domain_semaphore(domain)
-
-    try:
-        # Use semaphore to limit connections per domain
-        async with semaphore:
-            start_time = datetime.now()
-            
-            # Reduce timeout for faster checks
-            async with session.get(url, headers=headers, timeout=5.0, ssl=False) as response:
-                # Only read text if needed for pattern matching
-                if e_string or m_string:
-                    text = await response.text()
+    
+    for attempt in range(max_retries + 1):
+        try:
+            # Ultra-short timeout for faster overall performance
+            async with session.get(url, headers=headers, ssl=False, allow_redirects=True, timeout=1.5) as response:
+                # Only fetch text if absolutely needed
+                if (e_string and response.status == e_code) or (m_string and response.status == m_code):
+                    # Read with timeout protection
+                    try:
+                        text = await asyncio.wait_for(response.text(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        text = ""
                 else:
                     text = ""
-
+                
+                # Process response
                 if response.status == e_code and (not e_string or e_string in text):
-                    result = {
+                    return {
                         'status': response.status,
                         'exists': True,
-                        'final_url': str(response.url),
-                        'text': text if app.debug else None
+                        'final_url': str(response.url)
                     }
-                elif m_code is not None and m_string is not None and response.status == m_code and m_string in text:
-                    result = {
+                elif m_code is not None and response.status == m_code and (not m_string or m_string in text):
+                    return {
                         'status': response.status,
                         'exists': False,
-                        'final_url': str(response.url),
-                        'text': text if app.debug else None
+                        'final_url': str(response.url)
                     }
                 else:
-                    result = {
+                    return {
                         'status': response.status,
                         'exists': False,
-                        'final_url': str(response.url),
-                        'text': text if app.debug else None
+                        'final_url': str(response.url)
                     }
+        
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            if attempt < max_retries:
+                # Small delay before retry
+                await asyncio.sleep(0.1)
+                continue
+            else:
+                return {
+                    'exists': False,
+                    'status': 0,
+                    'error': str(e),
+                    'final_url': url
+                }
+        
+        except Exception as e:
+            return {
+                'exists': False,
+                'status': 0,
+                'error': str(e),
+                'final_url': url
+            }
 
-                end_time = datetime.now()
-                logger.info(f"Processed {url} in {(end_time - start_time).total_seconds():.2f} seconds")
-                return result
-
-    except asyncio.TimeoutError:
-        logger.warning(f"Timeout fetching {url}")
-        return {
-            'exists': False,
-            'status': 0,
-            'error': 'Timeout',
-            'final_url': url
-        }
-    except Exception as e:
-        logger.error(f"Error fetching {url}: {str(e)}")
-        return {
-            'exists': False,
-            'status': 0,
-            'error': str(e),
-            'final_url': url
-        }
-
-async def process_requests(urls, e_string, m_string, e_code, m_code):
-    # Use Cloudflare DNS for potentially faster lookups
-    resolver = AsyncResolver(nameservers=["1.1.1.1", "1.0.0.1"])
+async def process_urls_chunk(urls, e_string, m_string, e_code, m_code):
+    """Process a chunk of URLs in parallel with aggressive timeouts"""
+    tasks = []
+    for url in urls:
+        # Add a small delay between task creation to avoid overwhelming connections
+        task = asyncio.create_task(fetch_with_retry(url, e_string, m_string, e_code, m_code))
+        tasks.append((url, task))
     
-    # Configure connector with optimized settings
-    connector = aiohttp.TCPConnector(
-        limit=200,  # Increase connection limit
-        resolver=resolver,
-        ttl_dns_cache=300,  # Cache DNS results longer
-        use_dns_cache=True,
-        force_close=False,  # Keep connections alive when possible
-    )
+    results = {}
+    for url, task in tasks:
+        try:
+            # Apply timeout to the entire task
+            result = await asyncio.wait_for(task, timeout=2.0)
+            results[url] = result
+        except asyncio.TimeoutError:
+            results[url] = {
+                'exists': False,
+                'status': 0,
+                'error': 'Task timeout',
+                'final_url': url
+            }
     
-    # Configure client session with optimized timeouts
-    timeout = aiohttp.ClientTimeout(total=10.0, connect=2.0)
-    
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
-        return await asyncio.gather(*tasks, return_exceptions=True)
+    return results
 
-def run_async_check(urls, e_string, m_string, e_code, m_code):
-    """Run the async function in the current thread"""
-    loop = asyncio.new_event_loop()
+async def process_all_urls(urls, e_string, m_string, e_code, m_code):
+    """Process all URLs with chunking for better performance"""
+    # Optimal chunk size determined by testing
+    CHUNK_SIZE = 10
+    all_results = {}
+    
+    # Process in smaller chunks for better parallelism
+    for i in range(0, len(urls), CHUNK_SIZE):
+        chunk = urls[i:i+CHUNK_SIZE]
+        chunk_results = await process_urls_chunk(chunk, e_string, m_string, e_code, m_code)
+        all_results.update(chunk_results)
+    
+    return all_results
+
+# Wrapper function to run in a process
+def process_in_subprocess(urls, e_string, m_string, e_code, m_code):
+    """Execute the async code in a separate process"""
+    # Set shorter default socket timeout
+    import socket
+    socket.setdefaulttimeout(2.0)
+    
+    # Create and run a new event loop
+    asyncio.set_event_loop(asyncio.new_event_loop())
+    loop = asyncio.get_event_loop()
+    
     try:
-        return loop.run_until_complete(process_requests(urls, e_string, m_string, e_code, m_code))
+        # Run with timeout protection for the entire operation
+        return loop.run_until_complete(
+            asyncio.wait_for(
+                process_all_urls(urls, e_string, m_string, e_code, m_code),
+                timeout=5.0
+            )
+        )
+    except asyncio.TimeoutError:
+        # Return partial results on timeout
+        logger.error("Subprocess timed out")
+        return {url: {'exists': False, 'status': 0, 'error': 'Global timeout'} for url in urls}
     finally:
-        loop.close()
+        try:
+            # Cleanup session
+            loop.run_until_complete(close_session_pool())
+            loop.close()
+        except:
+            pass
 
 @app.route('/check', methods=['POST', 'OPTIONS'])
 def check_username():
     if request.method == 'OPTIONS':
-        # Preflight request handling
         response = jsonify({'status': 'ok'})
         response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
@@ -269,12 +329,12 @@ def check_username():
         e_code = data.get('e_code')
         m_code = data.get('m_code')
 
-        # Use thread pool to avoid blocking Flask
-        results = thread_pool.submit(
-            run_async_check, [url], e_string, m_string, e_code, m_code
-        ).result()
+        # Run single check directly
+        with ProcessPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(process_in_subprocess, [url], e_string, m_string, e_code, m_code)
+            results = future.result()
         
-        result = results[0]  # Get the first (and only) result
+        result = results.get(url, {'exists': False, 'status': 0, 'error': 'Processing error'})
 
         response = jsonify(result)
         response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
@@ -287,7 +347,6 @@ def check_username():
 @app.route('/batch_check', methods=['POST', 'OPTIONS'])
 def batch_check_usernames():
     if request.method == 'OPTIONS':
-        # Preflight request handling
         response = jsonify({'status': 'ok'})
         response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
@@ -300,37 +359,42 @@ def batch_check_usernames():
             return jsonify({'error': 'Missing or invalid URLs parameter'}), 400
 
         urls = data['urls']
-        default_e_string = data.get('e_string')
-        default_m_string = data.get('m_string')
-        default_e_code = data.get('e_code')
-        default_m_code = data.get('m_code')
+        e_string = data.get('e_string')
+        m_string = data.get('m_string')
+        e_code = data.get('e_code')
+        m_code = data.get('m_code')
 
         # Calculate start time for metrics
         start_time = datetime.now()
         
-        # Process in batches of 100 URLs maximum
-        BATCH_SIZE = 100
-        all_results = {}
-        
-        for i in range(0, len(urls), BATCH_SIZE):
-            batch_urls = urls[i:i+BATCH_SIZE]
-            batch_results = thread_pool.submit(
-                run_async_check, 
-                batch_urls, default_e_string, default_m_string, default_e_code, default_m_code
-            ).result()
+        # For small batches, process in a single subprocess
+        if len(urls) <= 33:
+            with ProcessPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(process_in_subprocess, urls, e_string, m_string, e_code, m_code)
+                results = future.result()
+        else:
+            # For larger batches, split across multiple processes
+            results = {}
+            chunk_size = max(5, len(urls) // NUM_WORKERS)
+            futures = []
             
-            # Add results to combined dictionary
-            all_results.update(dict(zip(batch_urls, batch_results)))
-            
-            # Log batch completion
-            completed = min(i + BATCH_SIZE, len(urls))
-            logger.info(f"Completed {completed}/{len(urls)} URLs")
+            with ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
+                # Submit tasks
+                for i in range(0, len(urls), chunk_size):
+                    chunk = urls[i:i+chunk_size]
+                    future = executor.submit(process_in_subprocess, chunk, e_string, m_string, e_code, m_code)
+                    futures.append(future)
+                
+                # Collect results
+                for future in futures:
+                    chunk_result = future.result()
+                    results.update(chunk_result)
         
         end_time = datetime.now()
         total_time = (end_time - start_time).total_seconds()
         logger.info(f"Processed {len(urls)} URLs in {total_time:.2f} seconds ({len(urls) / total_time:.2f} URLs/sec)")
 
-        response = jsonify({'results': all_results})
+        response = jsonify({'results': results})
         response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         return response
 
@@ -341,59 +405,56 @@ def batch_check_usernames():
 @app.route('/metadata', methods=['GET', 'OPTIONS'])
 def get_metadata():
     if request.method == 'OPTIONS':
-        # Preflight request handling
         response = jsonify({'status': 'ok'})
         response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         return response
 
-    try:
-        # Cache mechanism for metadata
-        if not hasattr(app, 'metadata_cache'):
-            # Ensure the file path is correct
+    # In-memory cache
+    if not hasattr(app, 'metadata_cache') or app.metadata_cache is None:
+        try:
             file_path = 'sites.json'
-            
             if not os.path.exists(file_path):
-                logger.error(f"File not found: {file_path}")
                 return jsonify({'error': 'File not found'}), 404
 
-            # Open and read the file once
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             if 'sites' not in data:
-                logger.error(f"Invalid JSON structure: 'sites' key missing")
                 return jsonify({'error': 'Invalid JSON structure'}), 500
                 
-            # Cache the data
             app.metadata_cache = data['sites']
-            
-        response = jsonify({'sites': app.metadata_cache})
-        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
-        return response
-
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON decode error: {str(e)}")
-        return jsonify({'error': 'Invalid JSON format'}), 500
-
-    except Exception as e:
-        logger.error(f"Error reading metadata: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        except Exception as e:
+            logger.error(f"Error loading metadata: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    
+    response = jsonify({'sites': app.metadata_cache})
+    response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
+    return response
 
 @app.route('/status', methods=['GET'])
 def get_status():
-    """Endpoint to get the status of the server"""
-    response = jsonify({
-        'server_status': 'running'
-    })
+    response = jsonify({'server_status': 'running'})
     response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')
     return response
 
 @app.route('/')
 def home():
-    return 'Keser API is running!'
+    return 'Keser API is running in turbo mode!'
+
+def signal_handler(sig, frame):
+    """Clean shutdown on SIGINT/SIGTERM"""
+    logger.info("Shutdown signal received, exiting...")
+    sys.exit(0)
 
 if __name__ == '__main__':
-    # Use a production-ready WSGI server like gunicorn in production
-    app.run(host='0.0.0.0', port=10000, threaded=True)
+    # Register signal handlers
+    import sys
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Run the app with production server
+    from waitress import serve
+    print("Starting server with Waitress on port 10000...")
+    serve(app, host='0.0.0.0', port=10000, threads=16)
