@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configure thread pool with 10 workers
-thread_pool = ThreadPoolExecutor(max_workers=5)
+thread_pool = ThreadPoolExecutor(max_workers=8)
 
 # Thread-safe request queue
 request_queue = queue.Queue()
@@ -148,7 +148,7 @@ def process_request(url, e_string, m_string, e_code, m_code):
         response = requests.get(
             url, 
             headers=headers, 
-            timeout=5,
+            timeout=14,
             allow_redirects=True,
             verify=False
         )
