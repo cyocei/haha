@@ -13,7 +13,7 @@ app = Flask(__name__)
 # Enable CORS for all routes and allow specific origins
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:3000", "http://your-frontend-domain.com"],  # Add your frontend origins here
+        "origins": ["https://vbiskit.com"],  # Allow your frontend origin
         "methods": ["GET", "POST", "OPTIONS"],  # Allowed HTTP methods
         "allow_headers": ["Content-Type"]  # Allowed headers
     }
@@ -192,12 +192,45 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
         tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
         return await asyncio.gather(*tasks)
 
+@app.route('/check', methods=['POST', 'OPTIONS'])
+def check_username():
+    if request.method == 'OPTIONS':
+        # Preflight request handling
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        return response
+
+    try:
+        data = request.get_json()
+        if not data or 'url' not in data:
+            return jsonify({'error': 'Missing URL parameter'}), 400
+
+        url = data['url']
+        e_string = data.get('e_string')
+        m_string = data.get('m_string')
+        e_code = data.get('e_code')
+        m_code = data.get('m_code')
+
+        # Submit the task to the thread pool and get future
+        future = asyncio.run(process_requests([url], e_string, m_string, e_code, m_code))
+        result = future[0]  # Get the first (and only) result
+
+        response = jsonify(result)
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
+        return response
+
+    except Exception as e:
+        logger.error(f"Error processing request: {str(e)}")
+        return jsonify({'error': str(e), 'exists': False}), 500
+
 @app.route('/batch_check', methods=['POST', 'OPTIONS'])
 def batch_check_usernames():
     if request.method == 'OPTIONS':
         # Preflight request handling
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')  # Allow your frontend origin
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
         return response
@@ -221,7 +254,7 @@ def batch_check_usernames():
         logger.info(f"Processed {len(urls)} URLs in {total_time:.2f} seconds ({len(urls) / total_time:.2f} URLs/sec)")
 
         response = jsonify({'results': dict(zip(urls, results))})
-        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')  # Allow your frontend origin
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
         return response
 
     except Exception as e:
@@ -233,7 +266,7 @@ def get_metadata():
     if request.method == 'OPTIONS':
         # Preflight request handling
         response = jsonify({'status': 'ok'})
-        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')  # Allow your frontend origin
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         return response
@@ -257,7 +290,7 @@ def get_metadata():
             return jsonify({'error': 'Invalid JSON structure'}), 500
 
         response = jsonify({'sites': data['sites']})
-        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')  # Allow your frontend origin
+        response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
         return response
 
     except json.JSONDecodeError as e:
@@ -274,7 +307,7 @@ def get_status():
     response = jsonify({
         'server_status': 'running'
     })
-    response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')  # Allow your frontend origin
+    response.headers.add('Access-Control-Allow-Origin', 'https://vbiskit.com')  # Allow your frontend origin
     return response
 
 @app.route('/')
