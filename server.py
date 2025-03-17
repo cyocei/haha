@@ -6,6 +6,7 @@ import os
 import aiohttp
 import asyncio
 from datetime import datetime
+from aiohttp.resolver import AsyncResolver
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -175,7 +176,9 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
         }
 
 async def process_requests(urls, e_string, m_string, e_code, m_code):
-    connector = aiohttp.TCPConnector(limit=100)  # Increase connection limit
+    # Use Google DNS (8.8.8.8 and 8.8.4.4)
+    resolver = AsyncResolver(nameservers=["8.8.8.8", "8.8.4.4"])
+    connector = aiohttp.TCPConnector(limit=100, resolver=resolver)  # Increase connection limit
     async with aiohttp.ClientSession(connector=connector) as session:
         tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
         return await asyncio.gather(*tasks)
@@ -211,6 +214,53 @@ def batch_check_usernames():
     except Exception as e:
         logger.error(f"Error processing batch request: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/metadata', methods=['GET', 'OPTIONS'])
+def get_metadata():
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        return response
+
+    try:
+        # Ensure the file path is correct
+        file_path = 'sites.json'
+        
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            logger.error(f"File not found: {file_path}")
+            return jsonify({'error': 'File not found'}), 404
+
+        # Open and read the file
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Check if the 'sites' key exists
+        if 'sites' not in data:
+            logger.error(f"Invalid JSON structure: 'sites' key missing")
+            return jsonify({'error': 'Invalid JSON structure'}), 500
+
+        return jsonify({'sites': data['sites']})
+
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error: {str(e)}")
+        return jsonify({'error': 'Invalid JSON format'}), 500
+
+    except Exception as e:
+        logger.error(f"Error reading metadata: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/status', methods=['GET'])
+def get_status():
+    """Endpoint to get the status of the server"""
+    return jsonify({
+        'server_status': 'running'
+    })
+
+@app.route('/')
+def home():
+    return 'Keser API is running!'
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
