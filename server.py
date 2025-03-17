@@ -5,9 +5,6 @@ import asyncio
 import json
 import random
 import logging
-import uvicorn
-from concurrent.futures import ThreadPoolExecutor
-import aiohttp
 import time
 
 app = Flask(__name__)
@@ -129,10 +126,6 @@ USER_AGENTS = [
 connector = TCPConnector(limit=50, ttl_dns_cache=60, ssl=False)
 timeout = ClientTimeout(total=10)  # Increased timeout for slower websites
 
-# Shared event loop
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
 async def check_single_site(session, url, e_string, m_string, e_code, m_code):
     try:
         headers = {
@@ -215,11 +208,19 @@ def check_username():
         e_code = data.get('e_code')
         m_code = data.get('m_code')
 
-        # Run the async check in the shared event loop
-        results = loop.run_until_complete(check_multiple_sites(urls, e_string, m_string, e_code, m_code))
+        # Create a new event loop for this request
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            results = loop.run_until_complete(check_multiple_sites(urls, e_string, m_string, e_code, m_code))
+        finally:
+            loop.close()
+            
         return jsonify(results)
 
     except Exception as e:
+        logger.error(f"Error processing request: {str(e)}")
         return jsonify({'error': str(e), 'exists': False}), 500
 
 # Cache for metadata
@@ -247,6 +248,7 @@ def get_metadata():
             metadata_cache_time = current_time
             return jsonify(metadata_cache)
     except Exception as e:
+        logger.error(f"Error fetching metadata: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/')
@@ -254,7 +256,4 @@ def home():
     return 'Keser API is running!'
 
 if __name__ == '__main__':
-    # Use uvicorn for better performance
-    uvicorn.run(app, host='0.0.0.0', port=10000, workers=4)
-else:
-    application = app
+    app.run(debug=True, host='0.0.0.0', port=10000)
