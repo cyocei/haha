@@ -9,7 +9,16 @@ from datetime import datetime
 from aiohttp.resolver import AsyncResolver
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+
+# Enable CORS for all routes and allow specific origins
+CORS(app, resources={
+    r"/*": {
+        "origins": ["http://localhost:3000", "http://your-frontend-domain.com"],  # Add your frontend origins here
+        "methods": ["GET", "POST", "OPTIONS"],  # Allowed HTTP methods
+        "allow_headers": ["Content-Type"]  # Allowed headers
+    }
+})
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -186,7 +195,9 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
 @app.route('/batch_check', methods=['POST', 'OPTIONS'])
 def batch_check_usernames():
     if request.method == 'OPTIONS':
+        # Preflight request handling
         response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')  # Allow your frontend origin
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
         return response
@@ -209,7 +220,9 @@ def batch_check_usernames():
         total_time = (end_time - start_time).total_seconds()
         logger.info(f"Processed {len(urls)} URLs in {total_time:.2f} seconds ({len(urls) / total_time:.2f} URLs/sec)")
 
-        return jsonify({'results': dict(zip(urls, results))})
+        response = jsonify({'results': dict(zip(urls, results))})
+        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')  # Allow your frontend origin
+        return response
 
     except Exception as e:
         logger.error(f"Error processing batch request: {str(e)}")
@@ -218,7 +231,9 @@ def batch_check_usernames():
 @app.route('/metadata', methods=['GET', 'OPTIONS'])
 def get_metadata():
     if request.method == 'OPTIONS':
+        # Preflight request handling
         response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')  # Allow your frontend origin
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
         return response
@@ -241,7 +256,9 @@ def get_metadata():
             logger.error(f"Invalid JSON structure: 'sites' key missing")
             return jsonify({'error': 'Invalid JSON structure'}), 500
 
-        return jsonify({'sites': data['sites']})
+        response = jsonify({'sites': data['sites']})
+        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')  # Allow your frontend origin
+        return response
 
     except json.JSONDecodeError as e:
         logger.error(f"JSON decode error: {str(e)}")
@@ -254,9 +271,11 @@ def get_metadata():
 @app.route('/status', methods=['GET'])
 def get_status():
     """Endpoint to get the status of the server"""
-    return jsonify({
+    response = jsonify({
         'server_status': 'running'
     })
+    response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')  # Allow your frontend origin
+    return response
 
 @app.route('/')
 def home():
