@@ -13,4 +13,5 @@ async-timeout==4.0.3
 aiohappyeyeballs>=2.3.0
 propcache>=0.2.0
 MarkupSafe>=2.1.1
-asgiref>=3.2.0  
+asgiref>=3.2.0
+uvicorn>=0.22.0
