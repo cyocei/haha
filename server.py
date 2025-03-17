@@ -1,14 +1,24 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import requests
+from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from aiohttp import ClientSession, ClientTimeout, TCPConnector
+import asyncio
 import json
 import random
 import logging
 import time
-import concurrent.futures
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
 
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -19,8 +29,31 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
 ]
 
-# No more asyncio or aiohttp - using synchronous requests with thread pool
-def check_single_site(url, e_string, m_string, e_code, m_code):
+# Create a connection pool that can be reused across requests
+connector = TCPConnector(limit=50, ttl_dns_cache=60, ssl=False)
+timeout = ClientTimeout(total=10)
+
+class CheckRequest(BaseModel):
+    urls: List[str]
+    e_string: Optional[str] = None
+    m_string: Optional[str] = None
+    e_code: Optional[int] = None
+    m_code: Optional[int] = None
+
+# This ClientSession is created on startup and closed on shutdown
+session: ClientSession = None
+
+@app.on_event("startup")
+async def startup_event():
+    global session
+    session = ClientSession(connector=connector, timeout=timeout)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    if session:
+        await session.close()
+
+async def check_single_site(url, e_string, m_string, e_code, m_code):
     try:
         headers = {
             'User-Agent': random.choice(USER_AGENTS),
@@ -29,47 +62,48 @@ def check_single_site(url, e_string, m_string, e_code, m_code):
             'Connection': 'keep-alive'
         }
 
-        response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
-        status = response.status_code
-        
-        try:
-            text = response.text
-            
-            # Fast path: check existence first
-            if status == e_code and e_string in text:
-                return {
-                    'status': status,
-                    'exists': True,
-                    'final_url': response.url,
-                    'text': text if app.debug else None
-                }
+        async with session.get(url, headers=headers, allow_redirects=True) as response:
+            try:
+                text = await response.text()
+                status = response.status
 
-            # Check for explicit non-existence
-            if m_code is not None and m_string is not None:
-                if status == m_code and m_string in text:
+                # Fast path: check existence first
+                if status == e_code and e_string in text:
                     return {
                         'status': status,
-                        'exists': False,
-                        'final_url': response.url,
-                        'text': text if app.debug else None
+                        'exists': True,
+                        'final_url': str(response.url),
+                        'text': None  # Don't return the text to save bandwidth
                     }
 
-            # Default case
-            return {
-                'status': status,
-                'exists': False,
-                'final_url': response.url,
-                'text': text if app.debug else None
-            }
+                # Check for explicit non-existence
+                if m_code is not None and m_string is not None:
+                    if status == m_code and m_string in text:
+                        return {
+                            'status': status,
+                            'exists': False,
+                            'final_url': str(response.url),
+                            'text': None
+                        }
 
-        except UnicodeDecodeError:
-            # Should be handled by requests automatically
-            return {
-                'status': status,
-                'exists': False,
-                'final_url': response.url,
-                'text': None
-            }
+                # Default case
+                return {
+                    'status': status,
+                    'exists': False,
+                    'final_url': str(response.url),
+                    'text': None
+                }
+
+            except UnicodeDecodeError:
+                # Fallback to latin-1 if UTF-8 fails
+                text = await response.read()
+                text = text.decode('latin-1')
+                return {
+                    'status': response.status,
+                    'exists': False,
+                    'final_url': str(response.url),
+                    'text': None
+                }
 
     except Exception as e:
         logger.error(f"Error checking {url}: {str(e)}")
@@ -80,68 +114,59 @@ def check_single_site(url, e_string, m_string, e_code, m_code):
             'final_url': url
         }
 
-def check_multiple_sites(urls, e_string, m_string, e_code, m_code):
-    # Use thread pool for concurrent requests without asyncio
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-        futures = [executor.submit(check_single_site, url, e_string, m_string, e_code, m_code) for url in urls]
-        results = [future.result() for future in concurrent.futures.as_completed(futures)]
-        return results
-
-@app.route('/check', methods=['POST', 'OPTIONS'])
-def check_username():
-    if request.method == 'OPTIONS':
-        return jsonify({'status': 'ok'})
-
+@app.post("/check")
+async def check_username(request: CheckRequest):
     try:
-        data = request.get_json()
-        if not data or 'urls' not in data:
-            return jsonify({'error': 'Missing URLs parameter'}), 400
+        urls = request.urls
+        e_string = request.e_string
+        m_string = request.m_string
+        e_code = request.e_code
+        m_code = request.m_code
 
-        urls = data['urls']
-        e_string = data.get('e_string')
-        m_string = data.get('m_string')
-        e_code = data.get('e_code')
-        m_code = data.get('m_code')
-
-        # Fully synchronous operation using thread pool
-        results = check_multiple_sites(urls, e_string, m_string, e_code, m_code)
-        return jsonify(results)
+        # Process sites concurrently
+        tasks = [check_single_site(url, e_string, m_string, e_code, m_code) for url in urls]
+        results = await asyncio.gather(*tasks)
+        return results
 
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}")
-        return jsonify({'error': str(e), 'exists': False}), 500
+        return JSONResponse(
+            status_code=500,
+            content={'error': str(e), 'exists': False}
+        )
 
 # Cache for metadata
 metadata_cache = None
 metadata_cache_time = 0
 CACHE_DURATION = 300  # 5 minutes
 
-@app.route('/metadata', methods=['GET', 'OPTIONS'])
-def get_metadata():
-    if request.method == 'OPTIONS':
-        return jsonify({'status': 'ok'})
-
+@app.get("/metadata")
+async def get_metadata():
     global metadata_cache, metadata_cache_time
     current_time = time.time()
 
     try:
         # Return cached data if available and fresh
         if metadata_cache and (current_time - metadata_cache_time) < CACHE_DURATION:
-            return jsonify(metadata_cache)
+            return metadata_cache
 
         # Read fresh data
         with open('sites.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
             metadata_cache = {'sites': data.get('sites', [])}
             metadata_cache_time = current_time
-            return jsonify(metadata_cache)
+            return metadata_cache
     except Exception as e:
         logger.error(f"Error fetching metadata: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return JSONResponse(
+            status_code=500,
+            content={'error': str(e)}
+        )
 
-@app.route('/')
-def home():
-    return 'Keser API is running!'
+@app.get("/")
+async def home():
+    return "Keser API is running!"
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=10000)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10000)
