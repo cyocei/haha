@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configure thread pool with 10 workers
-thread_pool = ThreadPoolExecutor(max_workers=35)
+thread_pool = ThreadPoolExecutor(max_workers=13)
 
 # Thread-safe request queue
 request_queue = queue.Queue()
