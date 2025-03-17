@@ -135,6 +135,8 @@ def check_username():
         url = data['url']
         e_string = data.get('e_string')
         m_string = data.get('m_string')
+        e_code = data.get('e_code')  # Get the expected existence status code
+        m_code = data.get('m_code')  # Get the expected missing status code
 
         headers = {
             'User-Agent': get_random_user_agent(),
@@ -147,38 +149,57 @@ def check_username():
             response = requests.get(
                 url, 
                 headers=headers, 
-                timeout=30,
+                timeout=13.6,
                 allow_redirects=True,
                 verify=False
             )
             
-            exists = True  # Default to True
-            
-            # Only mark as False if we're absolutely sure it doesn't exist
-            if response.status_code == 404:
-                exists = False
-            elif "404" in response.url or "not-found" in response.url:
-                exists = False
-            elif m_string and m_string.lower() in response.text.lower():
-                exists = False
-            
+            try:
+                text = response.content.decode('utf-8')
+            except UnicodeDecodeError:
+                text = response.content.decode('latin-1')
+
+            # Match CLI logic exactly:
+            # Only mark as existing if both e_code and e_string match
+            if response.status_code == e_code and e_string in text:
+                exists = True
+                return jsonify({
+                    'status': response.status_code,
+                    'exists': exists,
+                    'final_url': response.url,
+                    'text': text if app.debug else None
+                })
+
+            # Check for explicit non-existence if m_code and m_string are provided
+            if m_code is not None and m_string is not None:
+                if response.status_code == m_code and m_string in text:
+                    exists = False
+                    return jsonify({
+                        'status': response.status_code,
+                        'exists': exists,
+                        'final_url': response.url,
+                        'text': text if app.debug else None
+                    })
+
+            # If neither condition matched, assume it doesn't exist
             return jsonify({
                 'status': response.status_code,
-                'exists': exists,
+                'exists': False,
                 'final_url': response.url,
-                'text': response.text
+                'text': text if app.debug else None
             })
 
-        except:
-            # If any error occurs, assume the profile might exist
+        except requests.exceptions.RequestException as e:
+            # On error, don't assume existence
             return jsonify({
-                'exists': True,
-                'status': 200,
+                'exists': False,
+                'status': 0,
+                'error': str(e),
                 'final_url': url
             })
 
     except Exception as e:
-        return jsonify({'error': str(e), 'exists': True}), 200
+        return jsonify({'error': str(e), 'exists': False}), 500
 
 @app.route('/metadata', methods=['GET', 'OPTIONS'])
 def get_metadata():
@@ -188,7 +209,6 @@ def get_metadata():
     try:
         with open('sites.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
-            # Return ALL sites
             return jsonify({'sites': data.get('sites', [])})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
