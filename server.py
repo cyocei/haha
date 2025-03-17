@@ -146,7 +146,7 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
 
     try:
         start_time = datetime.now()
-        async with session.get(url, headers=headers, timeout=1, ssl=False) as response:
+        async with session.get(url, headers=headers, timeout=19.6, ssl=False) as response:
             text = await response.text()
 
             if response.status == e_code and e_string in text:
