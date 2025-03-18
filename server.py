@@ -269,7 +269,32 @@ def get_status():
 
 @app.route('/')
 def home():
-    return 'apis running'
+    return '''
+    <html>
+        <head>
+            <style>
+                body {
+                    background-color: black;
+                    color: white;
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    margin: 0;
+                }
+                .container {
+                    text-align: center;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>APIs Running</h1>
+            </div>
+        </body>
+    </html>
+    '''
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
