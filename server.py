@@ -301,7 +301,7 @@ def home():
         <body>
             <div class="container">
                 <img src="logo.jpeg" class="logo">
-                <div class="text">APIs Running</div>
+                <div class="text">apis up for keser</div>
             </div>
         </body>
     </html>
