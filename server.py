@@ -277,15 +277,16 @@ def home():
                     background-color: white;
                     color: black;
                     font-family: Arial, sans-serif;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    height: 100vh;
                     margin: 0;
+                    height: 100vh;
+                    display: flex;
+                    align-items: center;
                 }
                 .container {
+                    width: 100%;
                     display: flex;
                     align-items: center;
+                    justify-content: center;
                     gap: 20px;
                 }
                 .logo {
@@ -300,7 +301,7 @@ def home():
         <body>
             <div class="container">
                 <img src="logo.jpeg" class="logo">
-                <div class="text">apis up for keser</div>
+                <div class="text">APIs Running</div>
             </div>
         </body>
     </html>
