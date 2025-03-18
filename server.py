@@ -274,8 +274,8 @@ def home():
         <head>
             <style>
                 body {
-                    background-color: black;
-                    color: white;
+                    background-color: white;
+                    color: black;
                     font-family: Arial, sans-serif;
                     display: flex;
                     justify-content: center;
@@ -284,13 +284,23 @@ def home():
                     margin: 0;
                 }
                 .container {
-                    text-align: center;
+                    display: flex;
+                    align-items: center;
+                    gap: 20px;
+                }
+                .logo {
+                    width: 100px;
+                    height: auto;
+                }
+                .text {
+                    font-size: 24px;
                 }
             </style>
         </head>
         <body>
             <div class="container">
-                <h1>apis up for keser</h1>
+                <img src="logo.jpeg" class="logo">
+                <div class="text">apis up for keser</div>
             </div>
         </body>
     </html>
