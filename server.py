@@ -6,13 +6,16 @@ import os
 import aiohttp
 import asyncio
 import time
+from asyncio import Semaphore
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TIMEOUT = 1
+REQUEST_TIMEOUT = 1.35
+LINKS_PER_SECOND = 28
+rate_limiter = Semaphore(LINKS_PER_SECOND)
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
@@ -128,58 +131,58 @@ def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
 async def fetch(session, url, e_string, m_string, e_code, m_code):
-    headers = {
-        'User-Agent': get_random_user_agent(),
-        'Accept': '*/*',
-        'Connection': 'keep-alive',
-        'Keep-Alive': 'timeout=2.5, max=500'
-    }
+    async with rate_limiter:
+        headers = {
+            'User-Agent': get_random_user_agent(),
+            'Accept': '*/*'
+        }
 
-    try:
-        async with session.get(url, headers=headers, timeout=TIMEOUT, ssl=False, allow_redirects=True) as response:
-            if response.status == e_code:
-                text = await response.text()
-                if e_string in text:
-                    return {
-                        'status': response.status,
-                        'exists': True,
-                        'final_url': str(response.url)
-                    }
-
-            if m_code is not None and m_string is not None:
-                if response.status == m_code:
+        try:
+            async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False, allow_redirects=True) as response:
+                if response.status == e_code:
                     text = await response.text()
-                    if m_string in text:
+                    if e_string in text:
                         return {
                             'status': response.status,
-                            'exists': False,
+                            'exists': True,
                             'final_url': str(response.url)
                         }
 
+                if m_code is not None and m_string is not None:
+                    if response.status == m_code:
+                        text = await response.text()
+                        if m_string in text:
+                            return {
+                                'status': response.status,
+                                'exists': False,
+                                'final_url': str(response.url)
+                            }
+
+                return {
+                    'status': response.status,
+                    'exists': False,
+                    'final_url': str(response.url)
+                }
+
+        except Exception as e:
             return {
-                'status': response.status,
                 'exists': False,
-                'final_url': str(response.url)
+                'status': 0,
+                'error': str(e),
+                'final_url': url
             }
 
-    except Exception as e:
-        return {
-            'exists': False,
-            'status': 0,
-            'error': str(e),
-            'final_url': url
-        }
-
 async def process_requests(urls, e_string, m_string, e_code, m_code):
+    start_time = time.time()
     connector = aiohttp.TCPConnector(
-        force_close=False,  
+        force_close=False,
         enable_cleanup_closed=True,
-        limit=None,  
-        ttl_dns_cache=300,  
+        limit=None,
+        ttl_dns_cache=300,
         use_dns_cache=True,
         ssl=False
     )
-    timeout = aiohttp.ClientTimeout(total=TIMEOUT)
+    timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
     
     async with aiohttp.ClientSession(
         connector=connector,
@@ -188,7 +191,12 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
     ) as session:
         tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        return results
+        
+        # Calculate links per second
+        elapsed_time = time.time() - start_time
+        links_per_second = len(urls) / elapsed_time if elapsed_time > 0 else 0
+        
+        return results, links_per_second
 
 @app.route('/check', methods=['POST', 'OPTIONS'])
 def check_username():
@@ -212,9 +220,12 @@ def check_username():
         asyncio.set_event_loop(loop)
         future = loop.run_until_complete(process_requests([url], e_string, m_string, e_code, m_code))
         loop.close()
-        result = future[0]
+        result, links_per_second = future[0]
 
-        response = jsonify(result)
+        response = jsonify({
+            **result,
+            'links_per_second': links_per_second
+        })
         return response
 
     except Exception as e:
@@ -239,18 +250,30 @@ def batch_check_usernames():
         default_m_string = data.get('m_string')
         default_e_code = data.get('e_code')
         default_m_code = data.get('m_code')
+        
+        # Process in chunks of 1000 URLs for better memory management
         chunk_size = 1000
         all_results = {}
+        total_links_per_second = 0
+        chunk_count = 0
         
         for i in range(0, len(urls), chunk_size):
             chunk = urls[i:i + chunk_size]
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            results = loop.run_until_complete(process_requests(chunk, default_e_string, default_m_string, default_e_code, default_m_code))
+            results, links_per_second = loop.run_until_complete(process_requests(chunk, default_e_string, default_m_string, default_e_code, default_m_code))
             loop.close()
             all_results.update(dict(zip(chunk, results)))
+            total_links_per_second += links_per_second
+            chunk_count += 1
         
-        return jsonify({'results': all_results})
+        # Calculate average links per second across all chunks
+        avg_links_per_second = total_links_per_second / chunk_count if chunk_count > 0 else 0
+        
+        return jsonify({
+            'results': all_results,
+            'links_per_second': avg_links_per_second
+        })
 
     except Exception as e:
         logger.error(f"Error processing batch request: {str(e)}")
