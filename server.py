@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 0.55
-THREAD_POOL_SIZE = 13
+THREAD_POOL_SIZE = 14
 thread_pool = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
 
 USER_AGENTS = [
