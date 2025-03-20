@@ -6,13 +6,16 @@ import os
 import aiohttp
 import asyncio
 import time
+from asyncio import Semaphore
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 0.35
+REQUEST_TIMEOUT = 2.9 
+MAX_CONCURRENT_REQUESTS = 5  
+REQUEST_SEMAPHORE = Semaphore(MAX_CONCURRENT_REQUESTS)
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
@@ -128,55 +131,56 @@ def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
 async def fetch(session, url, e_string, m_string, e_code, m_code):
-    headers = {
-        'User-Agent': get_random_user_agent(),
-        'Accept': '*/*'
-    }
+    async with REQUEST_SEMAPHORE:  
+        headers = {
+            'User-Agent': get_random_user_agent(),
+            'Accept': '*/*'
+        }
 
-    try:
-        async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False, allow_redirects=True) as response:
-            raw_bytes = await response.read()
-            try:
-                text = raw_bytes.decode("utf-8")
-            except UnicodeDecodeError:
-                text = raw_bytes.decode("latin-1")
+        try:
+            async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False, allow_redirects=True) as response:
+                raw_bytes = await response.read()
+                try:
+                    text = raw_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    text = raw_bytes.decode("latin-1")
 
-            if response.status == e_code and e_string in text:
-                return {
-                    'status': response.status,
-                    'exists': True,
-                    'final_url': str(response.url),
-                    'text': text if app.debug else None
-                }
-
-            if m_code is not None and m_string is not None:
-                if response.status == m_code and m_string in text:
+                if response.status == e_code and e_string in text:
                     return {
                         'status': response.status,
-                        'exists': False,
+                        'exists': True,
                         'final_url': str(response.url),
                         'text': text if app.debug else None
                     }
 
-            return {
-                'status': response.status,
-                'exists': False,
-                'final_url': str(response.url),
-                'text': text if app.debug else None
-            }
+                if m_code is not None and m_string is not None:
+                    if response.status == m_code and m_string in text:
+                        return {
+                            'status': response.status,
+                            'exists': False,
+                            'final_url': str(response.url),
+                            'text': text if app.debug else None
+                        }
 
-    except Exception as e:
-        return {
-            'exists': False,
-            'status': 0,
-            'error': str(e),
-            'final_url': url
-        }
+                return {
+                    'status': response.status,
+                    'exists': False,
+                    'final_url': str(response.url),
+                    'text': text if app.debug else None
+                }
+
+        except Exception as e:
+            return {
+                'exists': False,
+                'status': 0,
+                'error': str(e),
+                'final_url': url
+            }
 
 async def process_requests(urls, e_string, m_string, e_code, m_code):
     start_time = time.time()
     
-    connector = aiohttp.TCPConnector(force_close=True, enable_cleanup_closed=True, limit=None)
+    connector = aiohttp.TCPConnector(force_close=True, enable_cleanup_closed=True, limit=MAX_CONCURRENT_REQUESTS)
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
     
     async with aiohttp.ClientSession(
@@ -184,8 +188,14 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
         timeout=timeout,
         skip_auto_headers=['User-Agent']
     ) as session:
-        tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = []
+        for i in range(0, len(urls), MAX_CONCURRENT_REQUESTS):
+            chunk = urls[i:i + MAX_CONCURRENT_REQUESTS]
+            tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in chunk]
+            chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+            results.extend(chunk_results)
+            if i + MAX_CONCURRENT_REQUESTS < len(urls):
+                await asyncio.sleep(REQUEST_TIMEOUT)
         
         elapsed_time = time.time() - start_time
         total_rate = len(urls) / elapsed_time if elapsed_time > 0 else 0
