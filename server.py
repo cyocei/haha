@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-REQUEST_TIMEOUT = 4.8  # seconds
+REQUEST_TIMEOUT = 2.3  # seconds
 MAX_CONNECTIONS = 100  # Maximum number of concurrent connections
 
 USER_AGENTS = [
@@ -132,10 +132,7 @@ def get_random_user_agent():
 async def fetch(session, url, e_string, m_string, e_code, m_code):
     headers = {
         'User-Agent': get_random_user_agent(),
-        'Accept': '*/*',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive',
-        'Keep-Alive': 'timeout=5'
+        'Accept': '*/*'
     }
 
     try:
@@ -176,30 +173,12 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
 
 async def process_requests(urls, e_string, m_string, e_code, m_code):
     start_time = time.time()
-    processed_count = 0
-    
-    # Configure connection pooling and limits
-    connector = aiohttp.TCPConnector(
-        limit=MAX_CONNECTIONS,
-        ttl_dns_cache=300,
-        use_dns_cache=True,
-        force_close=False
-    )
     
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
-    
-    async with aiohttp.ClientSession(
-        connector=connector,
-        timeout=timeout,
-        headers={
-            'Connection': 'keep-alive',
-            'Keep-Alive': 'timeout=5'
-        }
-    ) as session:
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
         results = await asyncio.gather(*tasks)
         
-        # Log final processing speed
         elapsed_time = time.time() - start_time
         total_rate = len(urls) / elapsed_time if elapsed_time > 0 else 0
         logger.info(f"Total processing rate: {total_rate:.2f} requests/second")
