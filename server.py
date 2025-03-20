@@ -12,7 +12,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 1.35
+TIMEOUT = 1.35
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
@@ -136,7 +136,7 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
     }
 
     try:
-        async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False, allow_redirects=True) as response:
+        async with session.get(url, headers=headers, timeout=TIMEOUT, ssl=False, allow_redirects=True) as response:
             if response.status == e_code:
                 text = await response.text()
                 if e_string in text:
@@ -179,7 +179,7 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
         use_dns_cache=True,
         ssl=False
     )
-    timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+    timeout = aiohttp.ClientTimeout(total=TIMEOUT)
     
     async with aiohttp.ClientSession(
         connector=connector,
