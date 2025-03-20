@@ -13,8 +13,8 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 2.9 
-MAX_CONCURRENT_REQUESTS = 5  
+REQUEST_TIMEOUT = 2.6 
+MAX_CONCURRENT_REQUESTS = 200  
 REQUEST_SEMAPHORE = Semaphore(MAX_CONCURRENT_REQUESTS)
 
 USER_AGENTS = [
