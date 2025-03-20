@@ -14,8 +14,8 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 1
-THREAD_POOL_SIZE = 25
+REQUEST_TIMEOUT = 1.0 
+THREAD_POOL_SIZE = 35
 thread_pool = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
 
 USER_AGENTS = [
@@ -139,34 +139,29 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
 
     try:
         async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False, allow_redirects=True) as response:
-            raw_bytes = await response.read()
-            try:
-                text = raw_bytes.decode("utf-8")
-            except UnicodeDecodeError:
-                text = raw_bytes.decode("latin-1")
-
-            if response.status == e_code and e_string in text:
-                return {
-                    'status': response.status,
-                    'exists': True,
-                    'final_url': str(response.url),
-                    'text': text if app.debug else None
-                }
-
-            if m_code is not None and m_string is not None:
-                if response.status == m_code and m_string in text:
+            if response.status == e_code:
+                text = await response.text()
+                if e_string in text:
                     return {
                         'status': response.status,
-                        'exists': False,
-                        'final_url': str(response.url),
-                        'text': text if app.debug else None
+                        'exists': True,
+                        'final_url': str(response.url)
                     }
+
+            if m_code is not None and m_string is not None:
+                if response.status == m_code:
+                    text = await response.text()
+                    if m_string in text:
+                        return {
+                            'status': response.status,
+                            'exists': False,
+                            'final_url': str(response.url)
+                        }
 
             return {
                 'status': response.status,
                 'exists': False,
-                'final_url': str(response.url),
-                'text': text if app.debug else None
+                'final_url': str(response.url)
             }
 
     except Exception as e:
@@ -178,8 +173,6 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
         }
 
 async def process_requests(urls, e_string, m_string, e_code, m_code):
-    start_time = time.time()
-    
     connector = aiohttp.TCPConnector(force_close=True, enable_cleanup_closed=True, limit=None)
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
     
@@ -190,11 +183,6 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
     ) as session:
         tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        elapsed_time = time.time() - start_time
-        total_rate = len(urls) / elapsed_time if elapsed_time > 0 else 0
-        logger.info(f"Total processing rate: {total_rate:.2f} requests/second")
-        
         return results
 
 @app.route('/check', methods=['POST', 'OPTIONS'])
