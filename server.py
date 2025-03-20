@@ -12,7 +12,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TIMEOUT = 0.44 # really low timeout not good should be higher but making it that for now so its fast enough, will still fetch all links
+TIMEOUT = 0.8 # really low timeout not good should be higher but making it that for now so its fast enough, will still fetch all links
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
