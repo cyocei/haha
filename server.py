@@ -14,9 +14,9 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TIMEOUT = 1.4  # yeah idk 
-MAX = 400  # yeah idk what this does i just put it in here 
-CHUNK_SIZE = 5963  # speeds up our sexy script
+TIMEOUT = 0.99  # yeah idk 
+MAX = 994  # yeah idk what this does i just put it in here 
+CHUNK_SIZE = 8963  # speeds up our sexy script
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
