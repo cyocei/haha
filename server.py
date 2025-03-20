@@ -13,10 +13,12 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUESTS_PER_SECOND = 95
-BATCH_SIZE = 95
-REQUEST_TIMEOUT = 0.1 
+# Rate limiting configuration
+REQUESTS_PER_SECOND = 33
+BATCH_SIZE = 33
+REQUEST_TIMEOUT = 26.8  # seconds
 
+# Semaphore for rate limiting
 semaphore = Semaphore(REQUESTS_PER_SECOND)
 
 USER_AGENTS = [
@@ -133,7 +135,7 @@ def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
 async def fetch(session, url, e_string, m_string, e_code, m_code):
-    async with semaphore:  
+    async with semaphore:  # Rate limiting
         headers = {
             'User-Agent': get_random_user_agent(),
             'Accept': '*/*',
