@@ -291,7 +291,6 @@ def get_metadata():
 
 @app.route('/status', methods=['GET'])
 def get_status():
-    """Endpoint to get the status of the server"""
     return jsonify({
         'server_status': 'running'
     })
