@@ -180,14 +180,11 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
         enable_cleanup_closed=True,
         limit=MAX_CONNECTIONS,
         limit_per_host=MAX_CONNECTIONS,
-        ttl_dns_cache=600,  # fuck dns cache
+        ttl_dns_cache=600,
         use_dns_cache=True,
         ssl=False,
-        keepalive_timeout=60,  
-        family=socket.AF_INET,  # i love making ipv4 faster
-        use_dns_cache=True,
-        enable_cleanup_closed=True,
-        force_close=False
+        keepalive_timeout=60,
+        family=socket.AF_INET
     )
     timeout = aiohttp.ClientTimeout(total=TIMEOUT)
     
