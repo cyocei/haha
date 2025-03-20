@@ -13,7 +13,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 1.35
+REQUEST_TIMEOUT = 1
 LINKS_PER_SECOND = 28
 rate_limiter = Semaphore(LINKS_PER_SECOND)
 
