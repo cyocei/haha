@@ -13,7 +13,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 1.0
+TIMEOUT = 1.0
 MAX_CONNECTIONS = 1000  # some how should make it faster 
 
 USER_AGENTS = [
@@ -136,7 +136,7 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
     }
 
     try:
-        async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False, allow_redirects=True) as response:
+        async with session.get(url, headers=headers, timeout=TIMEOUT, ssl=False, allow_redirects=True) as response:
             if response.status == e_code:
                 text = await response.text()
                 if e_string in text:
@@ -182,7 +182,7 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
         ssl=False,
         keepalive_timeout=30
     )
-    timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+    timeout = aiohttp.ClientTimeout(total=TIMEOUT)
     
     async with aiohttp.ClientSession(
         connector=connector,
@@ -216,9 +216,9 @@ def check_username():
         m_code = data.get('m_code')
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        future = loop.run_until_complete(process_requests([url], e_string, m_string, e_code, m_code))
+        results, links_per_second = loop.run_until_complete(process_requests([url], e_string, m_string, e_code, m_code))
         loop.close()
-        result, links_per_second = future[0]
+        result = results[0]
 
         response = jsonify({
             **result,
