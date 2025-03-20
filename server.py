@@ -13,9 +13,8 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 1
-LINKS_PER_SECOND = 91 # ofc it wont be 91 links
-rate_limiter = Semaphore(LINKS_PER_SECOND)
+REQUEST_TIMEOUT = 1.0
+MAX_CONNECTIONS = 1000  # some how should make it faster 
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
@@ -131,56 +130,57 @@ def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
 async def fetch(session, url, e_string, m_string, e_code, m_code):
-    async with rate_limiter:
-        headers = {
-            'User-Agent': get_random_user_agent(),
-            'Accept': '*/*'
-        }
+    headers = {
+        'User-Agent': get_random_user_agent(),
+        'Accept': '*/*'
+    }
 
-        try:
-            async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False, allow_redirects=True) as response:
-                if response.status == e_code:
+    try:
+        async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False, allow_redirects=True) as response:
+            if response.status == e_code:
+                text = await response.text()
+                if e_string in text:
+                    return {
+                        'status': response.status,
+                        'exists': True,
+                        'final_url': str(response.url)
+                    }
+
+            if m_code is not None and m_string is not None:
+                if response.status == m_code:
                     text = await response.text()
-                    if e_string in text:
+                    if m_string in text:
                         return {
                             'status': response.status,
-                            'exists': True,
+                            'exists': False,
                             'final_url': str(response.url)
                         }
 
-                if m_code is not None and m_string is not None:
-                    if response.status == m_code:
-                        text = await response.text()
-                        if m_string in text:
-                            return {
-                                'status': response.status,
-                                'exists': False,
-                                'final_url': str(response.url)
-                            }
-
-                return {
-                    'status': response.status,
-                    'exists': False,
-                    'final_url': str(response.url)
-                }
-
-        except Exception as e:
             return {
+                'status': response.status,
                 'exists': False,
-                'status': 0,
-                'error': str(e),
-                'final_url': url
+                'final_url': str(response.url)
             }
+
+    except Exception as e:
+        return {
+            'exists': False,
+            'status': 0,
+            'error': str(e),
+            'final_url': url
+        }
 
 async def process_requests(urls, e_string, m_string, e_code, m_code):
     start_time = time.time()
     connector = aiohttp.TCPConnector(
         force_close=False,
         enable_cleanup_closed=True,
-        limit=None,
+        limit=MAX_CONNECTIONS,
+        limit_per_host=MAX_CONNECTIONS,
         ttl_dns_cache=300,
         use_dns_cache=True,
-        ssl=False
+        ssl=False,
+        keepalive_timeout=30
     )
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
     
@@ -191,8 +191,6 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
     ) as session:
         tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Calculate links per second
         elapsed_time = time.time() - start_time
         links_per_second = len(urls) / elapsed_time if elapsed_time > 0 else 0
         
@@ -250,9 +248,7 @@ def batch_check_usernames():
         default_m_string = data.get('m_string')
         default_e_code = data.get('e_code')
         default_m_code = data.get('m_code')
-        
-        # Process in chunks of 1000 URLs for better memory management
-        chunk_size = 1000
+        chunk_size = 5000 # chunk is to speed it up fattys
         all_results = {}
         total_links_per_second = 0
         chunk_count = 0
@@ -266,8 +262,6 @@ def batch_check_usernames():
             all_results.update(dict(zip(chunk, results)))
             total_links_per_second += links_per_second
             chunk_count += 1
-        
-        # Calculate average links per second across all chunks
         avg_links_per_second = total_links_per_second / chunk_count if chunk_count > 0 else 0
         
         return jsonify({
@@ -313,7 +307,6 @@ def get_metadata():
 
 @app.route('/status', methods=['GET'])
 def get_status():
-    """Endpoint to get the status of the server"""
     return jsonify({
         'server_status': 'running'
     })
