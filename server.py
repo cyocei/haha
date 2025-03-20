@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 REQUEST_TIMEOUT = 1.83
 THREAD_POOL_SIZE = 5
 thread_pool = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
-LINKS_PER_SECOND = 33
+LINKS_PER_SECOND = 83
 rate_limiter = Semaphore(LINKS_PER_SECOND)
 
 USER_AGENTS = [
@@ -196,7 +196,7 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
         for url in urls:
             with rate_limiter:
                 tasks.append(fetch(session, url, e_string, m_string, e_code, m_code))
-                await asyncio.sleep(1/LINKS_PER_SECOND)  # Rate limiting delay
+                await asyncio.sleep(1/LINKS_PER_SECOND)  
         
         results = await asyncio.gather(*tasks, return_exceptions=True)
         end_time = time.time()
@@ -255,8 +255,6 @@ def batch_check_usernames():
         default_m_string = data.get('m_string')
         default_e_code = data.get('e_code')
         default_m_code = data.get('m_code')
-        
-        # Process in chunks of 1000 URLs for better memory management
         chunk_size = 1000
         all_results = {}
         total_links_per_second = 0
