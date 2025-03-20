@@ -13,7 +13,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-REQUEST_TIMEOUT = 13.6  # seconds
+REQUEST_TIMEOUT = 5  # seconds
+REQUESTS_PER_SECOND = 77
+BATCH_SIZE = 77
+
+# Semaphore for rate limiting
+semaphore = asyncio.Semaphore(REQUESTS_PER_SECOND)
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
@@ -129,53 +134,74 @@ def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
 async def fetch(session, url, e_string, m_string, e_code, m_code):
-    headers = {
-        'User-Agent': get_random_user_agent(),
-        'Accept': '*/*',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive'
-    }
+    async with semaphore:  # Rate limiting
+        headers = {
+            'User-Agent': get_random_user_agent(),
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Connection': 'keep-alive'
+        }
 
-    try:
-        async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False) as response:
-            text = await response.text()
+        try:
+            async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False) as response:
+                text = await response.text()
 
-            if response.status == e_code and e_string in text:
-                return {
-                    'status': response.status,
-                    'exists': True,
-                    'final_url': str(response.url),
-                    'text': text if app.debug else None
-                }
-
-            if m_code is not None and m_string is not None:
-                if response.status == m_code and m_string in text:
+                if response.status == e_code and e_string in text:
                     return {
                         'status': response.status,
-                        'exists': False,
+                        'exists': True,
                         'final_url': str(response.url),
                         'text': text if app.debug else None
                     }
 
+                if m_code is not None and m_string is not None:
+                    if response.status == m_code and m_string in text:
+                        return {
+                            'status': response.status,
+                            'exists': False,
+                            'final_url': str(response.url),
+                            'text': text if app.debug else None
+                        }
+
+                return {
+                    'status': response.status,
+                    'exists': False,
+                    'final_url': str(response.url),
+                    'text': text if app.debug else None
+                }
+
+        except Exception as e:
             return {
-                'status': response.status,
                 'exists': False,
-                'final_url': str(response.url),
-                'text': text if app.debug else None
+                'status': 0,
+                'error': str(e),
+                'final_url': url
             }
 
-    except Exception as e:
-        return {
-            'exists': False,
-            'status': 0,
-            'error': str(e),
-            'final_url': url
-        }
-
 async def process_requests(urls, e_string, m_string, e_code, m_code):
+    start_time = time.time()
+    processed_count = 0
+    
     async with aiohttp.ClientSession() as session:
-        tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
-        return await asyncio.gather(*tasks)
+        # Process URLs in batches
+        results = []
+        for i in range(0, len(urls), BATCH_SIZE):
+            batch = urls[i:i + BATCH_SIZE]
+            tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in batch]
+            batch_results = await asyncio.gather(*tasks)
+            results.extend(batch_results)
+            processed_count += len(batch)
+            
+            # Log processing speed
+            elapsed_time = time.time() - start_time
+            current_rate = processed_count / elapsed_time if elapsed_time > 0 else 0
+            logger.info(f"Processing rate: {current_rate:.2f} requests/second")
+            
+            # Add a small delay between batches to maintain rate limit
+            if i + BATCH_SIZE < len(urls):
+                await asyncio.sleep(1.0 / REQUESTS_PER_SECOND)
+        
+        return results
 
 @app.route('/check', methods=['POST', 'OPTIONS'])
 def check_username():
