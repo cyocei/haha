@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 1
-LINKS_PER_SECOND = 28
+LINKS_PER_SECOND = 91 # ofc it wont be 91 links
 rate_limiter = Semaphore(LINKS_PER_SECOND)
 
 USER_AGENTS = [
