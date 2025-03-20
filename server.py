@@ -14,9 +14,9 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TIMEOUT = 1  # yeah idk 
-MAX_CONNECTIONS = 5000  # yeah idk what this does i just put it in here 
-CHUNK_SIZE = 10000  # speeds up our sexy script
+TIMEOUT = 1.4  # yeah idk 
+MAX = 400  # yeah idk what this does i just put it in here 
+CHUNK_SIZE = 5963  # speeds up our sexy script
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
@@ -178,8 +178,8 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
     connector = aiohttp.TCPConnector(
         force_close=False,
         enable_cleanup_closed=True,
-        limit=MAX_CONNECTIONS,
-        limit_per_host=MAX_CONNECTIONS,
+        limit=MAX,
+        limit_per_host=MAX,
         ttl_dns_cache=600,
         use_dns_cache=True,
         ssl=False,
