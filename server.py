@@ -132,7 +132,7 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
         'User-Agent': get_random_user_agent(),
         'Accept': '*/*',
         'Connection': 'keep-alive',
-        'Keep-Alive': 'timeout=5, max=1000'
+        'Keep-Alive': 'timeout=2.5, max=500'
     }
 
     try:
