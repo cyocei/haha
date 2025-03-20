@@ -14,8 +14,8 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 0.33
-THREAD_POOL_SIZE = 16
+REQUEST_TIMEOUT = 0.66
+THREAD_POOL_SIZE = 9
 thread_pool = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
 
 USER_AGENTS = [
