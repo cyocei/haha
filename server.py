@@ -14,9 +14,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Rate limiting configuration
-REQUESTS_PER_SECOND = 95
-BATCH_SIZE = 95
-REQUEST_TIMEOUT = 13.6  # seconds
+REQUESTS_PER_SECOND = 400
+BATCH_SIZE = 400
+REQUEST_TIMEOUT = 0.1  # seconds
 
 # Semaphore for rate limiting
 semaphore = Semaphore(REQUESTS_PER_SECOND)
