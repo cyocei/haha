@@ -258,8 +258,6 @@ def batch_check_usernames():
         all_results = {}
         total_links_per_second = 0
         chunk_count = 0
-        
-        # Process chunks in parallel
         chunks = [urls[i:i + CHUNK_SIZE] for i in range(0, len(urls), CHUNK_SIZE)]
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
