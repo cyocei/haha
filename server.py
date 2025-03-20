@@ -12,7 +12,8 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 13.6
+# Configuration
+REQUEST_TIMEOUT = 4.8  # seconds
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
@@ -134,7 +135,7 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
     }
 
     try:
-        async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False) as response:
+        async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT, ssl=False, allow_redirects=True) as response:
             text = await response.text()
 
             if response.status == e_code and e_string in text:
@@ -172,10 +173,16 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
 async def process_requests(urls, e_string, m_string, e_code, m_code):
     start_time = time.time()
     
+    connector = aiohttp.TCPConnector(force_close=True, enable_cleanup_closed=True)
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    
+    async with aiohttp.ClientSession(
+        connector=connector,
+        timeout=timeout,
+        skip_auto_headers=['User-Agent']
+    ) as session:
         tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         
         elapsed_time = time.time() - start_time
         total_rate = len(urls) / elapsed_time if elapsed_time > 0 else 0
