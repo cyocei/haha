@@ -6,13 +6,17 @@ import os
 import aiohttp
 import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 0.6
+REQUEST_TIMEOUT = 2.83
+THREAD_POOL_SIZE = 35
+thread_pool = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
@@ -211,9 +215,11 @@ def check_username():
         m_string = data.get('m_string')
         e_code = data.get('e_code')
         m_code = data.get('m_code')
-
-        future = asyncio.run(process_requests([url], e_string, m_string, e_code, m_code))
-        result = future[0]  
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        future = loop.run_until_complete(process_requests([url], e_string, m_string, e_code, m_code))
+        loop.close()
+        result = future[0]
 
         response = jsonify(result)
         return response
@@ -240,8 +246,11 @@ def batch_check_usernames():
         default_m_string = data.get('m_string')
         default_e_code = data.get('e_code')
         default_m_code = data.get('m_code')
-
-        results = asyncio.run(process_requests(urls, default_e_string, default_m_string, default_e_code, default_m_code))
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        results = loop.run_until_complete(process_requests(urls, default_e_string, default_m_string, default_e_code, default_m_code))
+        loop.close()
+        
         return jsonify({'results': dict(zip(urls, results))})
 
     except Exception as e:
