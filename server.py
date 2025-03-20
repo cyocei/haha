@@ -8,15 +8,18 @@ import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from threading import Semaphore
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 1.15
-THREAD_POOL_SIZE = 8
+REQUEST_TIMEOUT = 1.83
+THREAD_POOL_SIZE = 5
 thread_pool = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
+LINKS_PER_SECOND = 33
+rate_limiter = Semaphore(LINKS_PER_SECOND)
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
@@ -134,9 +137,7 @@ def get_random_user_agent():
 async def fetch(session, url, e_string, m_string, e_code, m_code):
     headers = {
         'User-Agent': get_random_user_agent(),
-        'Accept': '*/*',
-        'Connection': 'keep-alive',
-        'Keep-Alive': 'timeout=5, max=1000'
+        'Accept': '*/*'
     }
 
     try:
@@ -176,10 +177,10 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
 
 async def process_requests(urls, e_string, m_string, e_code, m_code):
     connector = aiohttp.TCPConnector(
-        force_close=False,  # Keep connections alive
+        force_close=False,
         enable_cleanup_closed=True,
-        limit=None,  # Unlimited connections
-        ttl_dns_cache=300,  # Cache DNS for 5 minutes
+        limit=None,
+        ttl_dns_cache=300,
         use_dns_cache=True,
         ssl=False
     )
@@ -190,9 +191,19 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
         timeout=timeout,
         skip_auto_headers=['User-Agent']
     ) as session:
-        tasks = [fetch(session, url, e_string, m_string, e_code, m_code) for url in urls]
+        start_time = time.time()
+        tasks = []
+        for url in urls:
+            with rate_limiter:
+                tasks.append(fetch(session, url, e_string, m_string, e_code, m_code))
+                await asyncio.sleep(1/LINKS_PER_SECOND)  # Rate limiting delay
+        
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        return results
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        links_per_second = len(urls) / elapsed_time if elapsed_time > 0 else 0
+        
+        return results, links_per_second
 
 @app.route('/check', methods=['POST', 'OPTIONS'])
 def check_username():
@@ -214,9 +225,10 @@ def check_username():
         m_code = data.get('m_code')
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        future = loop.run_until_complete(process_requests([url], e_string, m_string, e_code, m_code))
+        results, links_per_second = loop.run_until_complete(process_requests([url], e_string, m_string, e_code, m_code))
         loop.close()
-        result = future[0]
+        result = results[0]
+        result['links_per_second'] = links_per_second
 
         response = jsonify(result)
         return response
@@ -247,16 +259,25 @@ def batch_check_usernames():
         # Process in chunks of 1000 URLs for better memory management
         chunk_size = 1000
         all_results = {}
+        total_links_per_second = 0
+        chunk_count = 0
         
         for i in range(0, len(urls), chunk_size):
             chunk = urls[i:i + chunk_size]
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            results = loop.run_until_complete(process_requests(chunk, default_e_string, default_m_string, default_e_code, default_m_code))
+            results, links_per_second = loop.run_until_complete(process_requests(chunk, default_e_string, default_m_string, default_e_code, default_m_code))
             loop.close()
             all_results.update(dict(zip(chunk, results)))
+            total_links_per_second += links_per_second
+            chunk_count += 1
         
-        return jsonify({'results': all_results})
+        average_links_per_second = total_links_per_second / chunk_count if chunk_count > 0 else 0
+        
+        return jsonify({
+            'results': all_results,
+            'links_per_second': average_links_per_second
+        })
 
     except Exception as e:
         logger.error(f"Error processing batch request: {str(e)}")
