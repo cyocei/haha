@@ -184,7 +184,7 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
         use_dns_cache=True,
         ssl=False,
         keepalive_timeout=60,  
-        family=socket.AF_INET,  # i love ip4 being faster
+        family=socket.AF_INET,  # i love making ipv4 faster
         use_dns_cache=True,
         enable_cleanup_closed=True,
         force_close=False
@@ -369,3 +369,6 @@ def home():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
+else:
+    # Gunicorn GEGE
+    application = app
