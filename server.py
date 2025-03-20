@@ -14,8 +14,8 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT = 1.0 
-THREAD_POOL_SIZE = 35
+REQUEST_TIMEOUT = 0.5  # Reduced to 0.5 seconds for faster timeouts
+THREAD_POOL_SIZE = 100  # Increased from 35 to 100 threads
 thread_pool = ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE)
 
 USER_AGENTS = [
@@ -134,7 +134,9 @@ def get_random_user_agent():
 async def fetch(session, url, e_string, m_string, e_code, m_code):
     headers = {
         'User-Agent': get_random_user_agent(),
-        'Accept': '*/*'
+        'Accept': '*/*',
+        'Connection': 'keep-alive',
+        'Keep-Alive': 'timeout=5, max=1000'
     }
 
     try:
@@ -173,7 +175,14 @@ async def fetch(session, url, e_string, m_string, e_code, m_code):
         }
 
 async def process_requests(urls, e_string, m_string, e_code, m_code):
-    connector = aiohttp.TCPConnector(force_close=True, enable_cleanup_closed=True, limit=None)
+    connector = aiohttp.TCPConnector(
+        force_close=False,  # Keep connections alive
+        enable_cleanup_closed=True,
+        limit=None,  # Unlimited connections
+        ttl_dns_cache=300,  # Cache DNS for 5 minutes
+        use_dns_cache=True,
+        ssl=False
+    )
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
     
     async with aiohttp.ClientSession(
@@ -234,12 +243,20 @@ def batch_check_usernames():
         default_m_string = data.get('m_string')
         default_e_code = data.get('e_code')
         default_m_code = data.get('m_code')
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        results = loop.run_until_complete(process_requests(urls, default_e_string, default_m_string, default_e_code, default_m_code))
-        loop.close()
         
-        return jsonify({'results': dict(zip(urls, results))})
+        # Process in chunks of 1000 URLs for better memory management
+        chunk_size = 1000
+        all_results = {}
+        
+        for i in range(0, len(urls), chunk_size):
+            chunk = urls[i:i + chunk_size]
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            results = loop.run_until_complete(process_requests(chunk, default_e_string, default_m_string, default_e_code, default_m_code))
+            loop.close()
+            all_results.update(dict(zip(chunk, results)))
+        
+        return jsonify({'results': all_results})
 
     except Exception as e:
         logger.error(f"Error processing batch request: {str(e)}")
@@ -279,6 +296,7 @@ def get_metadata():
 
 @app.route('/status', methods=['GET'])
 def get_status():
+    """Endpoint to get the status of the server"""
     return jsonify({
         'server_status': 'running'
     })
