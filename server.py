@@ -7,14 +7,16 @@ import aiohttp
 import asyncio
 import time
 from asyncio import Semaphore
+import socket
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TIMEOUT = 1.0
-MAX_CONNECTIONS = 1000  # some how should make it faster 
+TIMEOUT = 1  # yeah idk 
+MAX_CONNECTIONS = 5000  # yeah idk what this does i just put it in here 
+CHUNK_SIZE = 10000  # speeds up our sexy script
 
 USER_AGENTS = [
    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/37.0.2062.94 Chrome/37.0.2062.94 Safari/537.36",
@@ -132,7 +134,8 @@ def get_random_user_agent():
 async def fetch(session, url, e_string, m_string, e_code, m_code):
     headers = {
         'User-Agent': get_random_user_agent(),
-        'Accept': '*/*'
+        'Accept': '*/*',
+        'Connection': 'keep-alive'
     }
 
     try:
@@ -177,10 +180,14 @@ async def process_requests(urls, e_string, m_string, e_code, m_code):
         enable_cleanup_closed=True,
         limit=MAX_CONNECTIONS,
         limit_per_host=MAX_CONNECTIONS,
-        ttl_dns_cache=300,
+        ttl_dns_cache=600,  # fuck dns cache
         use_dns_cache=True,
         ssl=False,
-        keepalive_timeout=30
+        keepalive_timeout=60,  
+        family=socket.AF_INET,  # i love ip4 being faster
+        use_dns_cache=True,
+        enable_cleanup_closed=True,
+        force_close=False
     )
     timeout = aiohttp.ClientTimeout(total=TIMEOUT)
     
@@ -248,20 +255,31 @@ def batch_check_usernames():
         default_m_string = data.get('m_string')
         default_e_code = data.get('e_code')
         default_m_code = data.get('m_code')
-        chunk_size = 5000 # chunk is to speed it up fattys
         all_results = {}
         total_links_per_second = 0
         chunk_count = 0
         
-        for i in range(0, len(urls), chunk_size):
-            chunk = urls[i:i + chunk_size]
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            results, links_per_second = loop.run_until_complete(process_requests(chunk, default_e_string, default_m_string, default_e_code, default_m_code))
-            loop.close()
-            all_results.update(dict(zip(chunk, results)))
+        # Process chunks in parallel
+        chunks = [urls[i:i + CHUNK_SIZE] for i in range(0, len(urls), CHUNK_SIZE)]
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def process_chunks():
+            tasks = []
+            for chunk in chunks:
+                task = process_requests(chunk, default_e_string, default_m_string, default_e_code, default_m_code)
+                tasks.append(task)
+            return await asyncio.gather(*tasks)
+        
+        chunk_results = loop.run_until_complete(process_chunks())
+        loop.close()
+        
+        for i, (results, links_per_second) in enumerate(chunk_results):
+            chunk_urls = chunks[i]
+            all_results.update(dict(zip(chunk_urls, results)))
             total_links_per_second += links_per_second
             chunk_count += 1
+            
         avg_links_per_second = total_links_per_second / chunk_count if chunk_count > 0 else 0
         
         return jsonify({
