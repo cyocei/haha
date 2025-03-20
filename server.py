@@ -13,6 +13,7 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 # timeout max and chunk is to double the speed up etc..
 TIMEOUT = 0.99  # yeah idk 
 MAX = 9001  # yeah idk what this does i just put it in here 
